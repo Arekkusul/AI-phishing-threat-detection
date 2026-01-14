@@ -1,0 +1,153 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <p>Phishing detection overview for the last 30 days</p>
+</div>
+
+{% if not db_available %}
+<div class="alert alert-warning">
+    Database is not connected. Statistics are unavailable. Please check your DATABASE_URL configuration.
+</div>
+{% else %}
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Scans</div>
+        <div class="stat-value neutral">{{ scan_stats.total_scans or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Safe Emails</div>
+        <div class="stat-value safe">{{ scan_stats.safe_count or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Suspicious</div>
+        <div class="stat-value suspicious">{{ scan_stats.suspicious_count or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Phishing Detected</div>
+        <div class="stat-value phishing">{{ scan_stats.phishing_count or 0 }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Avg Confidence</div>
+        <div class="stat-value neutral">{{ scan_stats.avg_confidence or 0 }}%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">User Reports</div>
+        <div class="stat-value neutral">{{ report_stats.total_reports or 0 }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Scan Activity (Last 14 Days)</h2>
+    </div>
+    {% if daily_stats %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Total</th>
+                    <th>Safe</th>
+                    <th>Suspicious</th>
+                    <th>Phishing</th>
+                    <th>Distribution</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for day in daily_stats %}
+                <tr>
+                    <td>{{ day.scan_date }}</td>
+                    <td>{{ day.total }}</td>
+                    <td><span class="badge badge-safe">{{ day.safe }}</span></td>
+                    <td><span class="badge badge-suspicious">{{ day.suspicious }}</span></td>
+                    <td><span class="badge badge-phishing">{{ day.phishing }}</span></td>
+                    <td>
+                        <div class="confidence-bar">
+                            {% set safe_pct = (day.safe / day.total * 100) if day.total > 0 else 0 %}
+                            {% set sus_pct = (day.suspicious / day.total * 100) if day.total > 0 else 0 %}
+                            {% set phish_pct = (day.phishing / day.total * 100) if day.total > 0 else 0 %}
+                            <div style="display: flex; height: 100%;">
+                                <div style="width: {{ safe_pct }}%; background: var(--accent-green);"></div>
+                                <div style="width: {{ sus_pct }}%; background: var(--accent-yellow);"></div>
+                                <div style="width: {{ phish_pct }}%; background: var(--accent-red);"></div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No scan data available yet</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Top Phishing Sender Domains</h2>
+    </div>
+    {% if top_senders %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Domain</th>
+                    <th>Phishing Emails</th>
+                    <th>Avg Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for sender in top_senders %}
+                <tr>
+                    <td>{{ sender.domain or 'Unknown' }}</td>
+                    <td>{{ sender.count }}</td>
+                    <td>
+                        <span class="badge badge-phishing">{{ sender.avg_confidence }}%</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No phishing emails detected yet</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Notification Status</h2>
+    </div>
+    <div class="stats-grid" style="margin-bottom: 0;">
+        <div class="stat-card">
+            <div class="stat-label">Teams Notifications</div>
+            <div class="stat-value neutral">{{ report_stats.teams_sent or 0 }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Telegram Notifications</div>
+            <div class="stat-value neutral">{{ report_stats.telegram_sent or 0 }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">WhatsApp Notifications</div>
+            <div class="stat-value neutral">{{ report_stats.whatsapp_sent or 0 }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Unique Reporters</div>
+            <div class="stat-value neutral">{{ report_stats.unique_reporters or 0 }}</div>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}

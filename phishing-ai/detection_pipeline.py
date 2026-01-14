@@ -1,0 +1,628 @@
+"""
+Unified detection pipeline that runs all phishing checks in parallel
+and aggregates results into a final verdict.
+"""
+
+import os
+import re
+import base64
+import hashlib
+import concurrent.futures
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Literal
+from email import message_from_string
+import email.utils
+
+import dns.resolver
+import whois
+from urllib.parse import urlparse
+
+# Import detection modules
+from gemini_check import gemini_explain_reasons
+from sublime_check import sublime_attack_score
+from virustotal_check import virustotal_lookup_file_hash
+from url_check import urlscan_check_url
+
+
+Verdict = Literal["SAFE", "SUSPICIOUS", "PHISHING"]
+
+
+@dataclass
+class CheckResult:
+    """Result from a single check module."""
+    name: str
+    score: Optional[float] = None  # 0-100 scale
+    passed: Optional[bool] = None
+    details: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+
+
+@dataclass
+class PipelineResult:
+    """Aggregated result from all detection checks."""
+    verdict: Verdict
+    confidence: float  # 0-100
+    ai_score: Optional[float] = None
+    sublime_score: Optional[float] = None
+    reasons: List[str] = field(default_factory=list)
+    indicators: List[str] = field(default_factory=list)
+    check_results: Dict[str, CheckResult] = field(default_factory=dict)
+    email_hash: Optional[str] = None
+
+
+class DetectionPipeline:
+    """
+    Orchestrates phishing detection checks in parallel and aggregates results.
+    """
+
+    # Urgency phrases that indicate social engineering
+    URGENT_PHRASES = [
+        "urgent", "immediately", "account locked", "verify now",
+        "reset your password", "security alert", "suspended",
+        "unauthorized", "confirm your identity", "within 24 hours",
+        "action required", "verify your account", "click here now"
+    ]
+
+    # Known URL shorteners
+    SHORTENERS = ['bit.ly', 't.co', 'tinyurl.com', 'goo.gl', 'ow.ly',
+                  'is.gd', 'buff.ly', 'adf.ly', 'cutt.ly', 'rb.gy']
+
+    # Suspicious TLDs often used in phishing
+    SUSPICIOUS_TLDS = ['.xyz', '.top', '.club', '.work', '.click',
+                       '.loan', '.win', '.gq', '.ml', '.ga', '.cf']
+
+    def __init__(self, timeout_seconds: int = 30, max_workers: int = 8):
+        self.timeout = timeout_seconds
+        self.max_workers = max_workers
+        self._executor = None
+
+        # Load HuggingFace model lazily
+        self._phish_pipeline = None
+        self._model_loaded = False
+
+    def _get_phish_model(self):
+        """Lazy load the HuggingFace phishing model."""
+        if not self._model_loaded:
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+            tokenizer = AutoTokenizer.from_pretrained("ElSlay/BERT-Phishing-Email-Model")
+            model = AutoModelForSequenceClassification.from_pretrained("ElSlay/BERT-Phishing-Email-Model")
+            self._phish_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer)
+            self._model_loaded = True
+        return self._phish_pipeline
+
+    def parse_email(self, raw_email: str) -> Dict[str, Any]:
+        """Parse raw email or EML content into structured data."""
+        # Handle base64-encoded EML from taskpane
+        if raw_email.startswith("__BASE64_EML__:"):
+            try:
+                b64_data = raw_email.split(":", 1)[1]
+                raw_email = base64.b64decode(b64_data).decode("utf-8", errors="replace")
+            except Exception:
+                pass  # Fall through to parse as-is
+
+        msg = message_from_string(raw_email)
+
+        # Extract headers
+        from_header = msg.get("From", "")
+        to_header = msg.get("To", "")
+        subject = msg.get("Subject", "")
+        reply_to = msg.get("Reply-To", "")
+        return_path = msg.get("Return-Path", "")
+        message_id = msg.get("Message-ID", "")
+
+        # Extract sender email
+        from_addr = email.utils.parseaddr(from_header)[1]
+        reply_addr = email.utils.parseaddr(reply_to)[1] if reply_to else ""
+
+        # Get body
+        body_text = ""
+        body_html = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == "text/plain":
+                    try:
+                        body_text = part.get_payload(decode=True).decode("utf-8", errors="replace")
+                    except:
+                        body_text = str(part.get_payload())
+                elif content_type == "text/html":
+                    try:
+                        body_html = part.get_payload(decode=True).decode("utf-8", errors="replace")
+                    except:
+                        body_html = str(part.get_payload())
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                body_text = payload.decode("utf-8", errors="replace")
+            else:
+                body_text = str(msg.get_payload())
+
+        # If no plain text, strip HTML
+        if not body_text and body_html:
+            body_text = re.sub(r'<[^>]+>', ' ', body_html)
+            body_text = re.sub(r'\s+', ' ', body_text).strip()
+
+        return {
+            "raw": raw_email,
+            "from": from_header,
+            "from_addr": from_addr,
+            "to": to_header,
+            "subject": subject,
+            "reply_to": reply_addr,
+            "return_path": return_path,
+            "message_id": message_id,
+            "body_text": body_text,
+            "body_html": body_html,
+            "full_text": f"Subject: {subject}\n\n{body_text}"
+        }
+
+    def extract_urls(self, text: str) -> List[str]:
+        """Extract all URLs from text."""
+        return re.findall(r'https?://[^\s<>"\')]+', text)
+
+    def extract_domains(self, urls: List[str]) -> List[str]:
+        """Extract unique domains from URLs."""
+        domains = []
+        for url in urls:
+            try:
+                parsed = urlparse(url).netloc.lower().strip()
+                parsed = parsed.rstrip("=,.;")
+                if parsed.startswith("www."):
+                    parsed = parsed[4:]
+                if parsed and parsed not in domains:
+                    domains.append(parsed)
+            except:
+                pass
+        return domains
+
+    # --- Individual Check Methods ---
+
+    def check_bert_model(self, email_data: Dict) -> CheckResult:
+        """Run HuggingFace BERT phishing model."""
+        try:
+            model = self._get_phish_model()
+            text = email_data["full_text"][:2048]  # Truncate for model
+
+            result = model(text)[0]
+            # LABEL_0 = legit, LABEL_1 = phishing
+            is_phishing = result["label"] == "LABEL_1"
+            score = result["score"] * 100
+
+            if not is_phishing:
+                score = 100 - score  # Invert for legit classification
+
+            return CheckResult(
+                name="bert_model",
+                score=score,
+                passed=not is_phishing,
+                details={"label": result["label"], "raw_score": result["score"]}
+            )
+        except Exception as e:
+            return CheckResult(name="bert_model", error=str(e))
+
+    def check_header_mismatch(self, email_data: Dict) -> CheckResult:
+        """Check for From/Reply-To header mismatch."""
+        from_addr = email_data.get("from_addr", "").lower()
+        reply_addr = email_data.get("reply_to", "").lower()
+
+        mismatch = bool(from_addr and reply_addr and from_addr != reply_addr)
+
+        return CheckResult(
+            name="header_mismatch",
+            passed=not mismatch,
+            score=80 if mismatch else 0,
+            details={"from": from_addr, "reply_to": reply_addr, "mismatch": mismatch}
+        )
+
+    def check_urgency_keywords(self, email_data: Dict) -> CheckResult:
+        """Detect urgency/pressure language."""
+        text = email_data["full_text"].lower()
+        found = [phrase for phrase in self.URGENT_PHRASES if phrase in text]
+
+        score = min(len(found) * 15, 70)  # Cap at 70
+
+        return CheckResult(
+            name="urgency_keywords",
+            passed=len(found) == 0,
+            score=score,
+            details={"found_phrases": found, "count": len(found)}
+        )
+
+    def check_shortened_urls(self, email_data: Dict) -> CheckResult:
+        """Detect URL shorteners in email."""
+        urls = self.extract_urls(email_data["body_text"] + " " + email_data.get("body_html", ""))
+        domains = self.extract_domains(urls)
+
+        shortened = [d for d in domains if any(s in d for s in self.SHORTENERS)]
+
+        return CheckResult(
+            name="shortened_urls",
+            passed=len(shortened) == 0,
+            score=60 if shortened else 0,
+            details={"shortened_domains": shortened, "all_domains": domains}
+        )
+
+    def check_suspicious_tlds(self, email_data: Dict) -> CheckResult:
+        """Check for suspicious TLDs."""
+        urls = self.extract_urls(email_data["body_text"] + " " + email_data.get("body_html", ""))
+        domains = self.extract_domains(urls)
+
+        suspicious = [d for d in domains if any(d.endswith(tld) for tld in self.SUSPICIOUS_TLDS)]
+
+        return CheckResult(
+            name="suspicious_tlds",
+            passed=len(suspicious) == 0,
+            score=50 if suspicious else 0,
+            details={"suspicious_domains": suspicious}
+        )
+
+    def check_dns_records(self, email_data: Dict) -> CheckResult:
+        """Verify sender domain has valid DNS records."""
+        from_addr = email_data.get("from_addr", "")
+        if "@" not in from_addr:
+            return CheckResult(name="dns_records", passed=True, score=0, details={"skipped": True})
+
+        domain = from_addr.split("@")[1].lower()
+
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = ['8.8.8.8', '8.8.4.4']
+            resolver.timeout = 5
+            resolver.lifetime = 5
+
+            has_mx = False
+            has_a = False
+
+            try:
+                resolver.resolve(domain, 'MX')
+                has_mx = True
+            except:
+                pass
+
+            try:
+                resolver.resolve(domain, 'A')
+                has_a = True
+            except:
+                pass
+
+            valid = has_mx or has_a
+            return CheckResult(
+                name="dns_records",
+                passed=valid,
+                score=0 if valid else 40,
+                details={"domain": domain, "has_mx": has_mx, "has_a": has_a}
+            )
+        except Exception as e:
+            return CheckResult(name="dns_records", error=str(e))
+
+    def check_spf_record(self, email_data: Dict) -> CheckResult:
+        """Check if sender domain has SPF record."""
+        from_addr = email_data.get("from_addr", "")
+        if "@" not in from_addr:
+            return CheckResult(name="spf_record", passed=True, score=0, details={"skipped": True})
+
+        domain = from_addr.split("@")[1].lower()
+
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = ['8.8.8.8', '8.8.4.4']
+            resolver.timeout = 5
+
+            records = resolver.resolve(domain, 'TXT')
+            has_spf = any('v=spf1' in str(r) for r in records)
+
+            return CheckResult(
+                name="spf_record",
+                passed=has_spf,
+                score=0 if has_spf else 25,
+                details={"domain": domain, "has_spf": has_spf}
+            )
+        except Exception as e:
+            return CheckResult(name="spf_record", error=str(e), passed=True, score=0)
+
+    def check_domain_age(self, email_data: Dict) -> CheckResult:
+        """Check domain age via WHOIS - new domains are suspicious."""
+        urls = self.extract_urls(email_data["body_text"])
+        domains = self.extract_domains(urls)[:3]  # Limit to 3 domains
+
+        if not domains:
+            return CheckResult(name="domain_age", passed=True, score=0, details={"skipped": True})
+
+        new_domains = []
+        for domain in domains:
+            try:
+                w = whois.whois(domain)
+                if w.creation_date:
+                    creation = w.creation_date
+                    if isinstance(creation, list):
+                        creation = creation[0]
+                    from datetime import datetime, timedelta
+                    if datetime.now() - creation < timedelta(days=30):
+                        new_domains.append(domain)
+            except:
+                pass
+
+        return CheckResult(
+            name="domain_age",
+            passed=len(new_domains) == 0,
+            score=70 if new_domains else 0,
+            details={"new_domains": new_domains}
+        )
+
+    def check_sublime_security(self, email_data: Dict) -> CheckResult:
+        """Run Sublime Security attack score API."""
+        try:
+            result = sublime_attack_score(
+                email_data["raw"],
+                timeout_s=15,
+                raise_for_http_errors=False
+            )
+
+            if "error" in result:
+                return CheckResult(name="sublime", error=result.get("error"))
+
+            # Sublime returns attack_score 0-1
+            attack_score = result.get("attack_score", 0)
+            score = attack_score * 100
+
+            return CheckResult(
+                name="sublime",
+                score=score,
+                passed=score < 50,
+                details={"attack_score": attack_score, "raw_result": result}
+            )
+        except Exception as e:
+            return CheckResult(name="sublime", error=str(e))
+
+    def check_urlscan(self, email_data: Dict) -> CheckResult:
+        """Run URLScan.io on URLs in email."""
+        urls = self.extract_urls(email_data["body_text"])
+        if not urls:
+            return CheckResult(name="urlscan", passed=True, score=0, details={"skipped": True})
+
+        api_key = os.getenv("URLSCAN_API_KEY")
+        if not api_key:
+            return CheckResult(name="urlscan", error="URLSCAN_API_KEY not configured")
+
+        # Only scan first URL to avoid rate limits
+        url = urls[0]
+        try:
+            result = urlscan_check_url(url, api_key=api_key, timeout_s=20)
+
+            verdicts = result.get("result", {}).get("verdicts", {})
+            overall = verdicts.get("overall", {})
+            malicious = overall.get("malicious", False)
+            score_val = overall.get("score", 0)
+
+            return CheckResult(
+                name="urlscan",
+                score=score_val * 10 if malicious else 0,
+                passed=not malicious,
+                details={"url": url, "malicious": malicious, "verdicts": verdicts}
+            )
+        except TimeoutError:
+            return CheckResult(name="urlscan", error="Scan timeout", passed=True, score=0)
+        except Exception as e:
+            return CheckResult(name="urlscan", error=str(e))
+
+    def check_virustotal(self, email_data: Dict) -> CheckResult:
+        """Check attachment hashes against VirusTotal."""
+        # For now, we hash the email body as a simple check
+        # In production, this would extract and hash actual attachments
+        body_hash = hashlib.sha256(email_data["body_text"].encode()).hexdigest()
+
+        api_key = os.getenv("VIRUSTOTAL_API_KEY")
+        if not api_key:
+            return CheckResult(name="virustotal", passed=True, score=0,
+                             details={"skipped": True, "reason": "No API key"})
+
+        try:
+            result = virustotal_lookup_file_hash(body_hash, api_key=api_key)
+
+            if not result["found"]:
+                return CheckResult(
+                    name="virustotal",
+                    passed=True,
+                    score=0,
+                    details={"hash": body_hash, "found": False}
+                )
+
+            stats = result.get("raw", {}).get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            malicious = stats.get("malicious", 0)
+            suspicious = stats.get("suspicious", 0)
+
+            score = min((malicious * 10) + (suspicious * 5), 100)
+
+            return CheckResult(
+                name="virustotal",
+                score=score,
+                passed=malicious == 0,
+                details={"hash": body_hash, "stats": stats}
+            )
+        except Exception as e:
+            return CheckResult(name="virustotal", error=str(e))
+
+    def get_gemini_reasoning(self, verdict: Verdict, confidence: float, email_data: Dict) -> List[str]:
+        """Get AI reasoning from Gemini for the verdict."""
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return ["AI reasoning unavailable - Gemini API key not configured"]
+
+        try:
+            reasons = gemini_explain_reasons(
+                verdict=verdict if verdict != "SUSPICIOUS" else "PHISHING",
+                confidence_pct=confidence,
+                email_text=email_data["full_text"][:4000],
+                api_key=api_key
+            )
+            return [r for r in reasons if r]
+        except Exception as e:
+            return [f"AI reasoning error: {str(e)}"]
+
+    # --- Main Pipeline ---
+
+    def run(self, raw_email: str) -> PipelineResult:
+        """
+        Run the full detection pipeline on an email.
+        Returns aggregated verdict and all check results.
+        """
+        # Parse email
+        email_data = self.parse_email(raw_email)
+        email_hash = hashlib.sha256(raw_email.encode()).hexdigest()[:16]
+
+        # Define checks to run in parallel
+        checks = [
+            ("bert_model", lambda: self.check_bert_model(email_data)),
+            ("header_mismatch", lambda: self.check_header_mismatch(email_data)),
+            ("urgency_keywords", lambda: self.check_urgency_keywords(email_data)),
+            ("shortened_urls", lambda: self.check_shortened_urls(email_data)),
+            ("suspicious_tlds", lambda: self.check_suspicious_tlds(email_data)),
+            ("dns_records", lambda: self.check_dns_records(email_data)),
+            ("spf_record", lambda: self.check_spf_record(email_data)),
+            ("domain_age", lambda: self.check_domain_age(email_data)),
+            ("sublime", lambda: self.check_sublime_security(email_data)),
+        ]
+
+        # Optional external API checks (controlled via environment variables)
+        if os.getenv("ENABLE_URLSCAN", "true").lower() not in ("false", "0", "no"):
+            checks.append(("urlscan", lambda: self.check_urlscan(email_data)))
+
+        if os.getenv("ENABLE_VIRUSTOTAL", "true").lower() not in ("false", "0", "no"):
+            checks.append(("virustotal", lambda: self.check_virustotal(email_data)))
+
+        # Run checks in parallel
+        results: Dict[str, CheckResult] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_name = {
+                executor.submit(check_fn): name
+                for name, check_fn in checks
+            }
+
+            for future in concurrent.futures.as_completed(future_to_name, timeout=self.timeout):
+                name = future_to_name[future]
+                try:
+                    results[name] = future.result()
+                except Exception as e:
+                    results[name] = CheckResult(name=name, error=str(e))
+
+        # Aggregate results
+        verdict, confidence = self._aggregate_results(results)
+
+        # Get AI reasoning
+        reasons = self.get_gemini_reasoning(verdict, confidence, email_data)
+
+        # Build indicators list
+        indicators = self._build_indicators(results)
+
+        # Extract scores for response
+        ai_score = results.get("bert_model", CheckResult(name="")).score
+        sublime_score = results.get("sublime", CheckResult(name="")).score
+
+        return PipelineResult(
+            verdict=verdict,
+            confidence=round(confidence, 1),
+            ai_score=round(ai_score, 1) if ai_score is not None else None,
+            sublime_score=round(sublime_score, 1) if sublime_score is not None else None,
+            reasons=reasons,
+            indicators=indicators,
+            check_results=results,
+            email_hash=email_hash
+        )
+
+    def _aggregate_results(self, results: Dict[str, CheckResult]) -> tuple[Verdict, float]:
+        """
+        Aggregate check results into final verdict and confidence.
+        Uses weighted scoring with the BERT model as primary signal.
+        """
+        weights = {
+            "bert_model": 0.32,
+            "sublime": 0.22,
+            "urlscan": 0.05,
+            "virustotal": 0.03,
+            "header_mismatch": 0.08,
+            "urgency_keywords": 0.08,
+            "shortened_urls": 0.05,
+            "suspicious_tlds": 0.05,
+            "dns_records": 0.05,
+            "spf_record": 0.04,
+            "domain_age": 0.03,
+        }
+
+        total_weight = 0
+        weighted_score = 0
+
+        for name, result in results.items():
+            if result.score is not None and name in weights:
+                weight = weights[name]
+                weighted_score += result.score * weight
+                total_weight += weight
+
+        # Normalize
+        if total_weight > 0:
+            confidence = weighted_score / total_weight
+        else:
+            confidence = 50  # Uncertain
+
+        # Determine verdict
+        if confidence >= 70:
+            verdict = "PHISHING"
+        elif confidence >= 40:
+            verdict = "SUSPICIOUS"
+        else:
+            verdict = "SAFE"
+
+        return verdict, confidence
+
+    def _build_indicators(self, results: Dict[str, CheckResult]) -> List[str]:
+        """Build human-readable list of indicators from check results."""
+        indicators = []
+
+        if results.get("header_mismatch") and not results["header_mismatch"].passed:
+            indicators.append("From/Reply-To header mismatch detected")
+
+        urgency = results.get("urgency_keywords")
+        if urgency and urgency.details.get("found_phrases"):
+            phrases = urgency.details["found_phrases"][:3]
+            indicators.append(f"Urgency language: {', '.join(phrases)}")
+
+        if results.get("shortened_urls") and not results["shortened_urls"].passed:
+            domains = results["shortened_urls"].details.get("shortened_domains", [])
+            indicators.append(f"URL shortener detected: {', '.join(domains[:2])}")
+
+        if results.get("suspicious_tlds") and not results["suspicious_tlds"].passed:
+            domains = results["suspicious_tlds"].details.get("suspicious_domains", [])
+            indicators.append(f"Suspicious TLD: {', '.join(domains[:2])}")
+
+        if results.get("dns_records") and not results["dns_records"].passed:
+            indicators.append("Sender domain has no valid DNS records")
+
+        if results.get("spf_record") and not results["spf_record"].passed:
+            indicators.append("Sender domain missing SPF record")
+
+        if results.get("domain_age") and not results["domain_age"].passed:
+            domains = results["domain_age"].details.get("new_domains", [])
+            indicators.append(f"Recently registered domain: {', '.join(domains[:2])}")
+
+        urlscan_result = results.get("urlscan")
+        if urlscan_result and not urlscan_result.passed:
+            url = urlscan_result.details.get("url", "unknown")
+            indicators.append(f"URLScan flagged malicious URL: {url[:50]}")
+
+        vt_result = results.get("virustotal")
+        if vt_result and not vt_result.passed:
+            stats = vt_result.details.get("stats", {})
+            malicious = stats.get("malicious", 0)
+            indicators.append(f"VirusTotal: {malicious} vendors flagged content as malicious")
+
+        return indicators
+
+
+# Singleton instance for reuse
+_pipeline_instance: Optional[DetectionPipeline] = None
+
+def get_pipeline() -> DetectionPipeline:
+    """Get or create the detection pipeline singleton."""
+    global _pipeline_instance
+    if _pipeline_instance is None:
+        _pipeline_instance = DetectionPipeline()
+    return _pipeline_instance

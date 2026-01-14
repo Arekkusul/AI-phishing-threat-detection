@@ -1,0 +1,62 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Audit Log{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Audit Log</h1>
+    <p>System activity and event history</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recent Events</h2>
+        <div class="filters">
+            <a href="/admin/audit" class="filter-btn {% if not event_type %}active{% endif %}">All</a>
+            <a href="/admin/audit?event_type=email_scan" class="filter-btn {% if event_type == 'email_scan' %}active{% endif %}">Scans</a>
+            <a href="/admin/audit?event_type=phishing_report" class="filter-btn {% if event_type == 'phishing_report' %}active{% endif %}">Reports</a>
+        </div>
+    </div>
+
+    {% if logs %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Event Type</th>
+                    <th>IP Address</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else 'Unknown' }}</td>
+                    <td>
+                        <span class="badge {% if log.event_type == 'email_scan' %}badge-safe{% elif log.event_type == 'phishing_report' %}badge-phishing{% else %}badge-suspicious{% endif %}">
+                            {{ log.event_type }}
+                        </span>
+                    </td>
+                    <td style="font-family: monospace;">{{ log.ip_address or 'Unknown' }}</td>
+                    <td>
+                        {% if log.event_data %}
+                        <code style="font-size: 0.75rem; background: var(--bg-dark); padding: 0.25rem 0.5rem; border-radius: 0.25rem;">
+                            {{ log.event_data | tojson }}
+                        </code>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No audit events recorded yet{% if event_type %} for type "{{ event_type }}"{% endif %}</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

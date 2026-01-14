@@ -1,0 +1,38 @@
+:root { --bg:#0b0f19; --card:#121a2a; --text:#e8eefc; --muted:#a7b3d6; --border:#24304f; }
+* { box-sizing: border-box; font-family: Segoe UI, system-ui, Arial; }
+body { margin:0; background: var(--bg); color: var(--text); }
+.app { padding: 16px; }
+h2 { margin: 0 0 12px; font-size: 18px; }
+.card { background: var(--card); border:1px solid var(--border); border-radius: 12px; padding: 12px; }
+.row { display:flex; gap:10px; align-items:center; margin: 10px 0; }
+.row.right { justify-content:flex-end; }
+.btn { border:1px solid var(--border); background:#1b2742; color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer; }
+.btn.primary { background:#2246ff33; border-color:#3b57ff; }
+.btn.danger { background:#ff2b2b22; border-color:#ff4d4d; }
+.btn:disabled { opacity: .5; cursor:not-allowed; }
+
+.kv { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.k { color: var(--muted); font-size: 12px; }
+
+.pill { padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); font-weight: 600; }
+.pill.neutral { background:#ffffff10; }
+.pill.green { background:#00c85322; border-color:#00c853; }
+.pill.orange { background:#ff980022; border-color:#ff9800; }
+.pill.red { background:#ff174422; border-color:#ff1744; }
+
+.scores { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+.scoreBox { border:1px solid var(--border); border-radius: 12px; padding:10px; }
+.scoreTitle { color: var(--muted); font-size: 12px; margin-bottom:6px; }
+
+.section { margin-top: 12px; }
+.sectionTitle { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.reasons { margin:0; padding-left: 16px; }
+.muted { color: var(--muted); }
+.status { margin-top: 10px; font-size: 12px; }
+
+.toggle { display:flex; align-items:center; gap:10px; user-select:none; }
+.toggle input { display:none; }
+.slider { width:44px; height:24px; border-radius:999px; background:#ffffff1a; border:1px solid var(--border); position:relative; }
+.slider::after { content:""; width:18px; height:18px; border-radius:999px; background:#fff; position:absolute; top:2px; left:2px; transition:.2s; }
+.toggle input:checked + .slider::after { transform: translateX(20px); }
+.toggle .label { color: var(--muted); font-size: 12px; }

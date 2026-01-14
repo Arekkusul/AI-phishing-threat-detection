@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phishing Dashboard</title>
+
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="./taskpane.css" />
+</head>
+
+<body>
+  <div class="app">
+    <h2>Phishing Dashboard</h2>
+
+    <div class="row">
+      <button id="scanBtn" class="btn primary">Scan Email</button>
+
+      <label class="toggle">
+        <input id="autoToggle" type="checkbox" />
+        <span class="slider"></span>
+        <span class="label">Auto mode</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="kv">
+        <div class="k">Verdict</div>
+        <div id="verdict" class="pill neutral">—</div>
+      </div>
+
+      <div class="scores">
+        <div class="scoreBox">
+          <div class="scoreTitle">AI Confidence</div>
+          <div id="aiScore" class="pill neutral">—</div>
+        </div>
+        <div class="scoreBox">
+          <div class="scoreTitle">Sublime Confidence</div>
+          <div id="sublimeScore" class="pill neutral">—</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sectionTitle">Reasons</div>
+        <ul id="reasons" class="reasons">
+          <li class="muted">No analysis yet.</li>
+        </ul>
+      </div>
+
+      <div class="row right">
+        <button id="reportBtn" class="btn danger" disabled>Report as Phishing</button>
+      </div>
+
+      <div id="status" class="status muted">Idle.</div>
+    </div>
+  </div>
+
+  <script type="module" src="./taskpane.js"></script>
+</body>
+</html>

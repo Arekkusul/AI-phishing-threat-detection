@@ -1,0 +1,113 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Scan Details{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Scan Details</h1>
+    <p>Detailed analysis results for scan {{ scan.id }}</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Verdict</h2>
+        <span class="badge badge-{{ scan.verdict|lower }}" style="font-size: 1rem; padding: 0.5rem 1rem;">
+            {{ scan.verdict }}
+        </span>
+    </div>
+
+    <div class="detail-grid">
+        <div class="detail-item">
+            <div class="detail-label">Confidence Score</div>
+            <div class="detail-value">{{ scan.confidence }}%</div>
+            <div class="confidence-bar" style="max-width: 200px;">
+                <div class="confidence-bar-fill {{ 'phishing' if scan.confidence >= 70 else ('suspicious' if scan.confidence >= 40 else 'safe') }}" style="width: {{ scan.confidence }}%;"></div>
+            </div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">Scanned At</div>
+            <div class="detail-value">{{ scan.scanned_at.strftime('%Y-%m-%d %H:%M:%S UTC') if scan.scanned_at else 'Unknown' }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">AI Model Score</div>
+            <div class="detail-value">{{ scan.ai_score or '-' }}{% if scan.ai_score %}%{% endif %}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">Sublime Security Score</div>
+            <div class="detail-value">{{ scan.sublime_score or '-' }}{% if scan.sublime_score %}%{% endif %}</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Email Information</h2>
+    </div>
+
+    <div class="detail-grid">
+        <div class="detail-item">
+            <div class="detail-label">Subject</div>
+            <div class="detail-value">{{ scan.email_subject or 'No Subject' }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">From</div>
+            <div class="detail-value">{{ scan.email_from or 'Unknown' }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">To</div>
+            <div class="detail-value">{{ scan.email_to or 'Unknown' }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">Email Hash</div>
+            <div class="detail-value" style="font-family: monospace; font-size: 0.875rem;">{{ scan.email_hash }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">Scanned By</div>
+            <div class="detail-value">{{ scan.scanned_by or 'Anonymous' }}</div>
+        </div>
+        <div class="detail-item">
+            <div class="detail-label">IP Address</div>
+            <div class="detail-value">{{ scan.ip_address or 'Unknown' }}</div>
+        </div>
+    </div>
+</div>
+
+{% if scan.indicators %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Detected Indicators</h2>
+    </div>
+    <ul class="indicator-list">
+        {% for indicator in scan.indicators %}
+        <li>{{ indicator }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if scan.reasons %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">AI Reasoning</h2>
+    </div>
+    <ul class="reason-list">
+        {% for reason in scan.reasons %}
+        <li>{{ reason }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if scan.check_results %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Detailed Check Results</h2>
+    </div>
+    <pre class="json-viewer">{{ scan.check_results | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+<div style="margin-top: 1.5rem;">
+    <a href="/admin/scans" class="btn btn-secondary">Back to Scans</a>
+</div>
+{% endblock %}

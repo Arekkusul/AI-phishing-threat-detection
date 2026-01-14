@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Scans{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Email Scans</h1>
+    <p>View all analyzed emails</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recent Scans</h2>
+        <div class="filters">
+            <a href="/admin/scans" class="filter-btn {% if not verdict_filter %}active{% endif %}">All</a>
+            <a href="/admin/scans?verdict=SAFE" class="filter-btn {% if verdict_filter == 'SAFE' %}active{% endif %}">Safe</a>
+            <a href="/admin/scans?verdict=SUSPICIOUS" class="filter-btn {% if verdict_filter == 'SUSPICIOUS' %}active{% endif %}">Suspicious</a>
+            <a href="/admin/scans?verdict=PHISHING" class="filter-btn {% if verdict_filter == 'PHISHING' %}active{% endif %}">Phishing</a>
+        </div>
+    </div>
+
+    {% if scans %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Subject</th>
+                    <th>From</th>
+                    <th>Verdict</th>
+                    <th>Confidence</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scan in scans %}
+                <tr>
+                    <td>{{ scan.scanned_at.strftime('%Y-%m-%d %H:%M') if scan.scanned_at else 'Unknown' }}</td>
+                    <td>{{ (scan.email_subject or 'No Subject')[:50] }}{% if scan.email_subject and scan.email_subject|length > 50 %}...{% endif %}</td>
+                    <td>{{ (scan.email_from or 'Unknown')[:30] }}{% if scan.email_from and scan.email_from|length > 30 %}...{% endif %}</td>
+                    <td>
+                        <span class="badge badge-{{ scan.verdict|lower }}">{{ scan.verdict }}</span>
+                    </td>
+                    <td>
+                        {{ scan.confidence }}%
+                        <div class="confidence-bar">
+                            <div class="confidence-bar-fill {{ 'phishing' if scan.confidence >= 70 else ('suspicious' if scan.confidence >= 40 else 'safe') }}" style="width: {{ scan.confidence }}%;"></div>
+                        </div>
+                    </td>
+                    <td>
+                        <a href="/admin/scans/{{ scan.id }}" class="btn btn-secondary">View</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="/admin/scans?page={{ page - 1 }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}">Previous</a>
+        {% endif %}
+        <span class="btn btn-secondary">Page {{ page }}</span>
+        {% if scans|length == per_page %}
+        <a href="/admin/scans?page={{ page + 1 }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}">Next</a>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No scans found{% if verdict_filter %} with verdict "{{ verdict_filter }}"{% endif %}</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

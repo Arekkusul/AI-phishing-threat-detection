@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phishing Email Analyzer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Phishing Email Analyzer</h1>
+        <p class="subtitle">AI-powered email threat detection</p>
+
+        {% if error_msg %}
+            <div class="alert error">{{ error_msg }}</div>
+        {% endif %}
+
+        <form method="POST" action="/" class="email-form">
+            <div class="form-group">
+                <label for="email_text">Paste raw email content (headers + body):</label>
+                <textarea id="email_text" name="email_text" rows="15"
+                    placeholder="From: sender@example.com
+To: recipient@example.com
+Subject: Your account needs verification
+
+Dear User,
+Please click the link below to verify your account..."></textarea>
+            </div>
+
+            <div class="form-group-btn">
+                <button type="submit">Analyze Email</button>
+            </div>
+        </form>
+
+        {% if result %}
+        <div class="results">
+            <div class="verdict-section">
+                <h2>Verdict</h2>
+                <div class="verdict-box {% if result.verdict == 'PHISHING' %}phishing{% elif result.verdict == 'SUSPICIOUS' %}suspicious{% else %}safe{% endif %}">
+                    <span class="verdict-label">{{ result.verdict }}</span>
+                    <span class="confidence">{{ result.confidence }}% confidence</span>
+                </div>
+            </div>
+
+            <div class="scores-grid">
+                <div class="score-card">
+                    <div class="score-title">AI Model Score</div>
+                    <div class="score-value {% if result.ai_score and result.ai_score >= 70 %}high{% elif result.ai_score and result.ai_score >= 40 %}medium{% else %}low{% endif %}">
+                        {{ result.ai_score|default('-', true) }}{% if result.ai_score %}%{% endif %}
+                    </div>
+                </div>
+                <div class="score-card">
+                    <div class="score-title">Sublime Score</div>
+                    <div class="score-value {% if result.sublime_score and result.sublime_score >= 70 %}high{% elif result.sublime_score and result.sublime_score >= 40 %}medium{% else %}low{% endif %}">
+                        {{ result.sublime_score|default('-', true) }}{% if result.sublime_score %}%{% endif %}
+                    </div>
+                </div>
+            </div>
+
+            {% if indicators %}
+            <div class="section">
+                <h3>Detected Indicators</h3>
+                <ul class="indicator-list">
+                    {% for indicator in indicators %}
+                    <li class="indicator-item">{{ indicator }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if reasons %}
+            <div class="section">
+                <h3>AI Reasoning</h3>
+                <ul class="reasons-list">
+                    {% for reason in reasons %}
+                    <li class="reason-item">{{ reason }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <footer>
+            <p>Phishing Detection API v1.0</p>
+        </footer>
+    </div>
+</body>
+</html>

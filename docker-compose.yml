@@ -1,0 +1,105 @@
+services:
+  # ==========================================================================
+  # Phishing Detection API
+  # ==========================================================================
+  phishing-api:
+    build:
+      context: ./phishing-ai
+      dockerfile: Dockerfile
+    container_name: phishing-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-5000}:5000"
+    environment:
+      - PORT=5000
+      - FLASK_DEBUG=${FLASK_DEBUG:-false}
+      # Database
+      - DATABASE_URL=postgresql://phishing:${POSTGRES_PASSWORD:-phishing_secret}@postgres:5432/phishing_db
+      # API Authentication
+      - API_KEY=${API_KEY:-}
+      - ADMIN_KEY=${ADMIN_KEY:-}
+      # External API Keys
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY:-}
+      - URLSCAN_API_KEY=${URLSCAN_API_KEY:-}
+      # Feature Flags
+      - ENABLE_URLSCAN=${ENABLE_URLSCAN:-true}
+      - ENABLE_VIRUSTOTAL=${ENABLE_VIRUSTOTAL:-true}
+      # Caching
+      - CACHE_ENABLED=${CACHE_ENABLED:-true}
+      - CACHE_TTL_HOURS=${CACHE_TTL_HOURS:-24}
+      # CORS
+      - CLOUDFLARE_TUNNEL_URL=${CLOUDFLARE_TUNNEL_URL:-}
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
+      # Webhook Notifications
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - WHATSAPP_TWILIO_SID=${WHATSAPP_TWILIO_SID:-}
+      - WHATSAPP_TWILIO_TOKEN=${WHATSAPP_TWILIO_TOKEN:-}
+      - WHATSAPP_FROM=${WHATSAPP_FROM:-}
+      - WHATSAPP_TO=${WHATSAPP_TO:-}
+    volumes:
+      # Persist HuggingFace model cache (optional, model is pre-downloaded in image)
+      - huggingface_cache:/home/appuser/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - phishing-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ==========================================================================
+  # PostgreSQL Database (for scan history and reporting)
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: phishing-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=phishing
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-phishing_secret}
+      - POSTGRES_DB=phishing_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./phishing-ai/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - phishing-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phishing -d phishing_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Cloudflare Tunnel (optional - for HTTPS exposure)
+  # ==========================================================================
+  # Uncomment this service to enable Cloudflare Tunnel
+  # You need to create a tunnel first: cloudflared tunnel create phishing-api
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: phishing-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   environment:
+  #     - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+  #   networks:
+  #     - phishing-net
+  #   depends_on:
+  #     - phishing-api
+
+networks:
+  phishing-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  huggingface_cache:
+    driver: local

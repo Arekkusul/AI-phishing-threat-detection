@@ -1,0 +1,76 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Reports{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Phishing Reports</h1>
+    <p>User-reported phishing emails and notification status</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recent Reports</h2>
+    </div>
+
+    {% if reports %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Reported At</th>
+                    <th>Subject</th>
+                    <th>From</th>
+                    <th>Verdict</th>
+                    <th>Reporter</th>
+                    <th>Notifications</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for report in reports %}
+                <tr>
+                    <td>{{ report.reported_at.strftime('%Y-%m-%d %H:%M') if report.reported_at else 'Unknown' }}</td>
+                    <td>{{ (report.email_subject or 'No Subject')[:40] }}{% if report.email_subject and report.email_subject|length > 40 %}...{% endif %}</td>
+                    <td>{{ (report.email_from or 'Unknown')[:25] }}{% if report.email_from and report.email_from|length > 25 %}...{% endif %}</td>
+                    <td>
+                        <span class="badge badge-{{ report.verdict|lower }}">{{ report.verdict }}</span>
+                        <br>
+                        <small style="color: var(--text-muted);">{{ report.confidence }}%</small>
+                    </td>
+                    <td>{{ report.reporter_email or 'Anonymous' }}</td>
+                    <td>
+                        {% if report.teams_notified %}
+                        <span class="badge badge-safe" title="Teams notification sent">Teams</span>
+                        {% endif %}
+                        {% if report.telegram_notified %}
+                        <span class="badge badge-safe" title="Telegram notification sent">Telegram</span>
+                        {% endif %}
+                        {% if report.whatsapp_notified %}
+                        <span class="badge badge-safe" title="WhatsApp notification sent">WhatsApp</span>
+                        {% endif %}
+                        {% if not report.teams_notified and not report.telegram_notified and not report.whatsapp_notified %}
+                        <span class="badge badge-suspicious">No notifications</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="/admin/reports?page={{ page - 1 }}">Previous</a>
+        {% endif %}
+        <span class="btn btn-secondary">Page {{ page }}</span>
+        {% if reports|length == per_page %}
+        <a href="/admin/reports?page={{ page + 1 }}">Next</a>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No phishing reports submitted yet</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
