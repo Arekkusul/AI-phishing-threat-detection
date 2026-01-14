@@ -49,7 +49,7 @@ colorama==0.4.6
 
 # Required for transformers
 networkx==3.6.1
-sympy==1.14.0
+sympy==1.13.1
 mpmath==1.3.0
 setuptools==80.9.0
 
