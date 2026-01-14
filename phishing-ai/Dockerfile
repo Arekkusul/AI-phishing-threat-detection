@@ -23,15 +23,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Create cache directory (will be empty if model download fails)
-RUN mkdir -p /root/.cache/huggingface
-
-# Pre-download the HuggingFace model during build (faster container startup)
-# This step is optional - if it fails due to network issues, the model will be downloaded at runtime
-RUN python -c "from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
-    AutoTokenizer.from_pretrained('ElSlay/BERT-Phishing-Email-Model'); \
-    AutoModelForSequenceClassification.from_pretrained('ElSlay/BERT-Phishing-Email-Model')" \
-    || echo "Model pre-download skipped - will download at runtime"
+# Note: HuggingFace model will be downloaded at runtime on first request
+# This keeps the image small (~1GB vs 8GB with pre-downloaded model)
 
 # =============================================================================
 # Stage 2: Runtime - Minimal production image
@@ -60,9 +53,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser
 
-# Copy pre-downloaded model from builder (may be empty if download failed)
-COPY --from=builder /root/.cache/huggingface /home/appuser/.cache/huggingface
-RUN chown -R appuser:appuser /home/appuser/.cache
+# Create cache directory for HuggingFace model (downloaded at runtime)
+RUN mkdir -p /home/appuser/.cache/huggingface && \
+    chown -R appuser:appuser /home/appuser/.cache
 
 # Copy application code
 COPY --chown=appuser:appuser . .
@@ -82,8 +75,8 @@ ENV PYTHONUNBUFFERED=1 \
 # Expose port
 EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+# Health check (longer start period for model download on first request)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
 # Run the application
