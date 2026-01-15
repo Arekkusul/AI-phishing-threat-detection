@@ -14,7 +14,6 @@ Office.onReady(() => {
     setStatus(autoMode ? "Auto mode enabled." : "Auto mode disabled.");
 
     if (autoMode) {
-      // Scan immediately and also whenever selection changes
       hookItemChanged();
       scanCurrentEmail();
     }
@@ -24,28 +23,25 @@ Office.onReady(() => {
 });
 
 function setStatus(msg) {
-  const el = document.getElementById("status");
-  el.textContent = msg;
+  document.getElementById("status").textContent = msg;
 }
 
 function setVerdictUI(verdictText) {
   const el = document.getElementById("verdict");
   el.textContent = verdictText ?? "—";
-
   el.classList.remove("green", "orange", "red", "neutral");
   el.classList.add(colorClassForVerdict(verdictText));
 }
 
-function setScoreUI(id, score0to100) {
+function setScoreUI(id, score) {
   const el = document.getElementById(id);
-  if (score0to100 === null || score0to100 === undefined || Number.isNaN(score0to100)) {
+  if (score === null || score === undefined || Number.isNaN(score)) {
     el.textContent = "—";
     el.classList.remove("green", "orange", "red");
     el.classList.add("neutral");
     return;
   }
-
-  const v = Math.max(0, Math.min(100, Number(score0to100)));
+  const v = Math.max(0, Math.min(100, Number(score)));
   el.textContent = `${v.toFixed(0)}%`;
   el.classList.remove("green", "orange", "red", "neutral");
   el.classList.add(colorClassForScore(v));
@@ -54,23 +50,15 @@ function setScoreUI(id, score0to100) {
 function setReasonsUI(reasons, indicators) {
   const ul = document.getElementById("reasons");
   ul.innerHTML = "";
-
   const allItems = [];
 
-  // Add indicators first (these are concrete detections)
   if (indicators && indicators.length > 0) {
-    for (const ind of indicators) {
-      allItems.push({ text: ind, type: "indicator" });
-    }
+    indicators.forEach(ind => allItems.push({ text: ind, type: "indicator" }));
   }
-
-  // Add AI reasoning
   if (reasons && reasons.length > 0) {
-    for (const r of reasons) {
-      if (r && r.trim()) {
-        allItems.push({ text: r, type: "reason" });
-      }
-    }
+    reasons.forEach(r => {
+      if (r && r.trim()) allItems.push({ text: r, type: "reason" });
+    });
   }
 
   if (allItems.length === 0) {
@@ -81,18 +69,15 @@ function setReasonsUI(reasons, indicators) {
     return;
   }
 
-  for (const item of allItems) {
+  allItems.forEach(item => {
     const li = document.createElement("li");
     li.textContent = item.text;
-    if (item.type === "indicator") {
-      li.style.color = "#ff9800"; // Orange for indicators
-    }
+    if (item.type === "indicator") li.style.color = "#ff9800";
     ul.appendChild(li);
-  }
+  });
 }
 
 function colorClassForScore(score) {
-  // You can tweak thresholds:
   if (score >= 70) return "red";
   if (score >= 40) return "orange";
   return "green";
@@ -132,23 +117,18 @@ async function scanCurrentEmail() {
 
   try {
     const eml = await getEmlFromItem(item);
-    console.log(eml)
+    setStatus("Sending to analyzer...");
 
-    setStatus("Sending to local analyzer...");
     const res = await fetch(`${API_BASE}/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ eml })
     });
 
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`Analyze failed (${res.status}): ${txt}`);
-    }
+    if (!res.ok) throw new Error(`Analyze failed (${res.status})`);
 
     const data = await res.json();
 
-    // expected fields from backend
     setVerdictUI(data.verdict);
     setScoreUI("aiScore", data.ai_score);
     setScoreUI("sublimeScore", data.sublime_score);
@@ -171,7 +151,7 @@ async function reportCurrentEmail() {
   const item = Office.context.mailbox.item;
   if (!item) return;
 
-  setStatus("Reporting to Teams...");
+  setStatus("Reporting...");
   disableReport(true);
 
   try {
@@ -183,10 +163,7 @@ async function reportCurrentEmail() {
       body: JSON.stringify({ eml })
     });
 
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`Report failed (${res.status}): ${txt}`);
-    }
+    if (!res.ok) throw new Error(`Report failed (${res.status})`);
 
     setStatus("Reported successfully.");
   } catch (err) {
@@ -202,43 +179,46 @@ function disableReport(disabled) {
 }
 
 // ---- EML extraction ----
-// Preferred: getAsFileAsync (produces .eml in read mode when supported)
-// Fallback: build RFC822-like content using headers + body
-function getEmlFromItem(item) {
-  return new Promise((resolve, reject) => {
-    if (typeof item.getAsFileAsync === "function") {
-      item.getAsFileAsync((result) => {
-        if (result.status !== Office.AsyncResultStatus.Succeeded) {
-          // fallback instead of failing
-          buildPseudoEml(item).then(resolve).catch(reject);
-          return;
-        }
-        const file = result.value;
-        file.getSliceAsync(0, (sliceResult) => {
-          try {
-            if (sliceResult.status !== Office.AsyncResultStatus.Succeeded) {
-              file.closeAsync();
-              buildPseudoEml(item).then(resolve).catch(reject);
-              return;
-            }
-            const slice = sliceResult.value;
-            const base64 = slice.data; // base64 encoded
-            file.closeAsync();
-            // Backend accepts raw RFC822 text, so decode base64 in backend OR here.
-            // We'll send base64-wrapped EML to backend to decode safely:
-            resolve(`__BASE64_EML__:${base64}`);
-          } catch (e) {
-            try { file.closeAsync(); } catch {}
-            buildPseudoEml(item).then(resolve).catch(reject);
-          }
-        });
-      });
-    } else {
-      buildPseudoEml(item).then(resolve).catch(reject);
-    }
-  });
+// Microsoft recommended: use pseudo-EML for compatibility with all clients
+async function getEmlFromItem(item) {
+  try {
+    const pseudo = await buildPseudoEml(item);
+    const base64 = btoa(unescape(encodeURIComponent(pseudo)));
+    return `__BASE64_EML__:${base64}`;
+  } catch (err) {
+    console.error("Failed to build EML:", err);
+    throw new Error("Could not extract email content");
+  }
 }
 
+async function buildPseudoEml(item) {
+  let headers = "";
+  try {
+    if (typeof item.getAllInternetHeadersAsync === "function") {
+      headers = await getAsyncProm(item, item.getAllInternetHeadersAsync, {});
+    }
+  } catch {}
+
+  let bodyText = "";
+  try {
+    bodyText = await getAsyncProm(item, item.body.getAsync, { coercionType: Office.CoercionType.Text });
+  } catch {}
+
+  const subject = item.subject || "";
+  const from = item.from?.emailAddress || item.from?.displayName || "";
+  const to = (item.to || []).map(x => x.emailAddress || x.displayName).join(", ");
+
+  return `From: ${from}
+To: ${to}
+Subject: ${subject}
+${headers ? headers.trim() : ""}
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+${bodyText}`;
+}
+
+// Helper to promisify Office.js async calls
 function getAsyncProm(item, method, opts) {
   return new Promise((resolve, reject) => {
     method.call(item, opts, (res) => {
@@ -249,36 +229,4 @@ function getAsyncProm(item, method, opts) {
       }
     });
   });
-}
-
-async function buildPseudoEml(item) {
-  // Collect headers + body; this is not perfect EML but works for analysis services.
-  let headers = "";
-  try {
-    if (typeof item.getAllInternetHeadersAsync === "function") {
-      headers = await getAsyncProm(item, item.getAllInternetHeadersAsync, {});
-    }
-  } catch {}
-
-  let bodyText = "";
-  try {
-    // Use text body; switch to HTML if you prefer coercionType: Html
-    bodyText = await getAsyncProm(item, item.body.getAsync, { coercionType: Office.CoercionType.Text });
-  } catch {}
-
-  const subject = item.subject || "";
-  const from = item.from?.emailAddress || item.from?.displayName || "";
-  const to = (item.to || []).map(x => x.emailAddress || x.displayName).join(", ");
-
-  const pseudo =
-`From: ${from}
-To: ${to}
-Subject: ${subject}
-${headers ? headers.trim() : ""}
-MIME-Version: 1.0
-Content-Type: text/plain; charset="utf-8"
-
-${bodyText}`;
-
-  return pseudo;
 }
