@@ -13,7 +13,7 @@ import os
 import json
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional
 
@@ -360,7 +360,15 @@ def check_email():
             cached = db.get_scan_by_hash(email_hash)
             if cached:
                 # Check if cache is still valid
-                cache_age = datetime.utcnow() - cached.get("scanned_at", datetime.utcnow())
+                scanned_at = cached.get("scanned_at")
+                if scanned_at:
+                    # Handle timezone-aware vs naive datetime comparison
+                    now = datetime.now(timezone.utc)
+                    if scanned_at.tzinfo is None:
+                        scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+                    cache_age = now - scanned_at
+                else:
+                    cache_age = timedelta(hours=0)
                 if cache_age < timedelta(hours=Config.CACHE_TTL_HOURS):
                     logger.info(f"Returning cached result for hash {email_hash[:8]}")
                     return jsonify({
