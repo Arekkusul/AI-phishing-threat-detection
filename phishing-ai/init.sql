@@ -143,13 +143,13 @@ ORDER BY scan_date DESC;
 -- Top reported domains (for threat intelligence)
 CREATE OR REPLACE VIEW top_reported_domains AS
 SELECT
-    email_from,
+    s.email_from,
     COUNT(*) as report_count,
-    AVG(confidence) as avg_confidence
+    AVG(r.confidence) as avg_confidence
 FROM reports r
 JOIN scans s ON r.scan_id = s.id
 WHERE r.reported_at > CURRENT_DATE - INTERVAL '30 days'
-GROUP BY email_from
+GROUP BY s.email_from
 ORDER BY report_count DESC
 LIMIT 50;
 
