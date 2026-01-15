@@ -52,7 +52,7 @@ class Database:
 
     def initialize(self) -> bool:
         """
-        Initialize the connection pool.
+        Initialize the connection pool and create tables if needed.
         Returns True if successful, False otherwise.
         """
         if self._initialized:
@@ -70,10 +70,121 @@ class Database:
             )
             self._initialized = True
             logger.info(f"Database connection pool initialized (min={self.min_connections}, max={self.max_connections})")
+
+            # Auto-create tables if they don't exist
+            self._create_tables_if_needed()
+
             return True
         except Exception as e:
             logger.error(f"Failed to initialize database pool: {e}")
             return False
+
+    def _create_tables_if_needed(self):
+        """Create database tables if they don't exist."""
+        try:
+            conn = Database._pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    # Check if scans table exists
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = 'scans'
+                        )
+                    """)
+                    tables_exist = cur.fetchone()[0]
+
+                    if not tables_exist:
+                        logger.info("Database tables not found - creating schema...")
+                        self._run_init_sql(cur)
+                        conn.commit()
+                        logger.info("Database schema created successfully")
+                    else:
+                        logger.info("Database tables already exist")
+            finally:
+                Database._pool.putconn(conn)
+        except Exception as e:
+            logger.error(f"Failed to check/create tables: {e}")
+
+    def _run_init_sql(self, cursor):
+        """Run the initialization SQL to create all tables."""
+        init_sql = """
+        -- Enable UUID extension
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+        -- Scans Table
+        CREATE TABLE IF NOT EXISTS scans (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            email_hash VARCHAR(64) NOT NULL,
+            verdict VARCHAR(20) NOT NULL CHECK (verdict IN ('SAFE', 'SUSPICIOUS', 'PHISHING')),
+            confidence DECIMAL(5,2) NOT NULL,
+            ai_score DECIMAL(5,2),
+            sublime_score DECIMAL(5,2),
+            reasons JSONB DEFAULT '[]'::jsonb,
+            indicators JSONB DEFAULT '[]'::jsonb,
+            check_results JSONB DEFAULT '{}'::jsonb,
+            email_subject VARCHAR(500),
+            email_from VARCHAR(255),
+            email_to VARCHAR(255),
+            scanned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            scanned_by VARCHAR(255),
+            ip_address INET,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scans_email_hash ON scans(email_hash);
+        CREATE INDEX IF NOT EXISTS idx_scans_scanned_at ON scans(scanned_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_scans_verdict ON scans(verdict);
+
+        -- Reports Table
+        CREATE TABLE IF NOT EXISTS reports (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            scan_id UUID REFERENCES scans(id) ON DELETE SET NULL,
+            email_hash VARCHAR(64) NOT NULL,
+            reporter_email VARCHAR(255),
+            reporter_name VARCHAR(255),
+            verdict VARCHAR(20) NOT NULL,
+            confidence DECIMAL(5,2) NOT NULL,
+            teams_notified BOOLEAN DEFAULT FALSE,
+            telegram_notified BOOLEAN DEFAULT FALSE,
+            whatsapp_notified BOOLEAN DEFAULT FALSE,
+            reported_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_email);
+        CREATE INDEX IF NOT EXISTS idx_reports_reported_at ON reports(reported_at DESC);
+
+        -- API Keys Table
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            key_hash VARCHAR(64) NOT NULL UNIQUE,
+            name VARCHAR(100) NOT NULL,
+            can_scan BOOLEAN DEFAULT TRUE,
+            can_report BOOLEAN DEFAULT TRUE,
+            can_admin BOOLEAN DEFAULT FALSE,
+            rate_limit_per_minute INTEGER DEFAULT 60,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            expires_at TIMESTAMP WITH TIME ZONE
+        );
+
+        -- Audit Log Table
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id BIGSERIAL PRIMARY KEY,
+            event_type VARCHAR(50) NOT NULL,
+            event_data JSONB,
+            ip_address INET,
+            user_agent TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type);
+        CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at DESC);
+        """
+        cursor.execute(init_sql)
 
     @property
     def is_available(self) -> bool:
