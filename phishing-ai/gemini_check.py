@@ -6,7 +6,7 @@ from typing import List, Literal, Optional
 Verdict = Literal["SAFE", "PHISHING"]
 
 # You can change this model if you want; Gemini API quickstart shows current examples.
-DEFAULT_MODEL = "gemini-3.0-flash"  # example model used in docs :contentReference[oaicite:1]{index=1}
+DEFAULT_MODEL = "gemini-2.0-flash"  # fast and cost-effective model
 
 
 def gemini_explain_reasons(
