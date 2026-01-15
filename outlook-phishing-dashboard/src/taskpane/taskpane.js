@@ -1,5 +1,5 @@
-// Update this if your Flask server differs:
-const API_BASE = "http://127.0.0.1:5000";
+// Update this to your deployed API URL:
+const API_BASE = "https://ai-phishing-threat-detection-production.up.railway.app";
 
 let autoMode = false;
 let lastItemId = null;
