@@ -323,20 +323,42 @@ class DetectionPipeline:
     def check_domain_age(self, email_data: Dict) -> CheckResult:
         """Check domain age via WHOIS - new domains are suspicious."""
         urls = self.extract_urls(email_data["body_text"])
-        domains = self.extract_domains(urls)[:3]  # Limit to 3 domains
+        domains = self.extract_domains(urls)[:2]  # Limit to 2 domains to reduce timeout risk
 
         if not domains:
             return CheckResult(name="domain_age", passed=True, score=0, details={"skipped": True})
 
         new_domains = []
+        checked_domains = []
+
         for domain in domains:
             try:
-                w = whois.whois(domain)
-                if w.creation_date:
+                # Use a thread with timeout for WHOIS lookup
+                import threading
+                result_container = {"whois": None, "error": None}
+
+                def whois_lookup():
+                    try:
+                        result_container["whois"] = whois.whois(domain)
+                    except Exception as e:
+                        result_container["error"] = str(e)
+
+                thread = threading.Thread(target=whois_lookup)
+                thread.daemon = True
+                thread.start()
+                thread.join(timeout=8)  # 8 second timeout per domain
+
+                if thread.is_alive():
+                    # WHOIS lookup timed out
+                    continue
+
+                w = result_container["whois"]
+                if w and w.creation_date:
                     creation = w.creation_date
                     if isinstance(creation, list):
                         creation = creation[0]
                     from datetime import datetime, timedelta
+                    checked_domains.append(domain)
                     if datetime.now() - creation < timedelta(days=30):
                         new_domains.append(domain)
             except:
@@ -346,7 +368,7 @@ class DetectionPipeline:
             name="domain_age",
             passed=len(new_domains) == 0,
             score=70 if new_domains else 0,
-            details={"new_domains": new_domains}
+            details={"new_domains": new_domains, "checked": checked_domains}
         )
 
     def check_sublime_security(self, email_data: Dict) -> CheckResult:
@@ -498,12 +520,24 @@ class DetectionPipeline:
                 for name, check_fn in checks
             }
 
-            for future in concurrent.futures.as_completed(future_to_name, timeout=self.timeout):
-                name = future_to_name[future]
-                try:
-                    results[name] = future.result()
-                except Exception as e:
-                    results[name] = CheckResult(name=name, error=str(e))
+            try:
+                for future in concurrent.futures.as_completed(future_to_name, timeout=self.timeout):
+                    name = future_to_name[future]
+                    try:
+                        results[name] = future.result()
+                    except Exception as e:
+                        results[name] = CheckResult(name=name, error=str(e))
+            except concurrent.futures.TimeoutError:
+                # Some checks timed out - collect results from completed futures
+                for future, name in future_to_name.items():
+                    if name not in results:
+                        if future.done():
+                            try:
+                                results[name] = future.result(timeout=0)
+                            except Exception as e:
+                                results[name] = CheckResult(name=name, error=str(e))
+                        else:
+                            results[name] = CheckResult(name=name, error="Check timed out")
 
         # Aggregate results
         verdict, confidence = self._aggregate_results(results)
