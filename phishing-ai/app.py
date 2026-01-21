@@ -594,6 +594,8 @@ def index():
     indicators = []
     reasons = []
 
+    check_results = {}
+
     if request.method == "POST":
         email_text = request.form.get("email_text", "").strip()
 
@@ -614,6 +616,16 @@ def index():
                 }
                 indicators = pipeline_result.indicators
                 reasons = pipeline_result.reasons
+
+                # Convert check_results to serializable format for template
+                for name, check in pipeline_result.check_results.items():
+                    check_results[name] = {
+                        "name": check.name,
+                        "score": check.score,
+                        "passed": check.passed,
+                        "details": check.details,
+                        "error": check.error
+                    }
 
                 # Save to database
                 email_data = pipeline.parse_email(email_text)
@@ -640,7 +652,8 @@ def index():
         result=result,
         error_msg=error_msg,
         indicators=indicators,
-        reasons=reasons
+        reasons=reasons,
+        check_results=check_results
     )
 
 

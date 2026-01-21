@@ -78,6 +78,103 @@ Please click the link below to verify your account..."></textarea>
                 </ul>
             </div>
             {% endif %}
+
+            {% if check_results %}
+            <div class="section">
+                <h3>Detection Checks</h3>
+                <div class="checks-grid">
+                    {% set check_display = {
+                        'bert_model': {'label': 'BERT AI Model', 'icon': '🤖', 'weight': '30%'},
+                        'sublime': {'label': 'Sublime Security', 'icon': '🛡️', 'weight': '20%'},
+                        'html_threats': {'label': 'HTML Threats', 'icon': '📄', 'weight': '8%'},
+                        'header_mismatch': {'label': 'Header Mismatch', 'icon': '📧', 'weight': '7%'},
+                        'urgency_keywords': {'label': 'Urgency Keywords', 'icon': '⚡', 'weight': '7%'},
+                        'shortened_urls': {'label': 'URL Shorteners', 'icon': '🔗', 'weight': '5%'},
+                        'urlscan': {'label': 'URLScan.io', 'icon': '🔍', 'weight': '5%'},
+                        'suspicious_tlds': {'label': 'Suspicious TLDs', 'icon': '🌐', 'weight': '4%'},
+                        'dns_records': {'label': 'DNS Records', 'icon': '📡', 'weight': '4%'},
+                        'virustotal': {'label': 'VirusTotal', 'icon': '🦠', 'weight': '4%'},
+                        'spf_record': {'label': 'SPF Record', 'icon': '✉️', 'weight': '3%'},
+                        'domain_age': {'label': 'Domain Age', 'icon': '📅', 'weight': '3%'}
+                    } %}
+                    {% for key, check in check_results.items() %}
+                    <div class="check-card {% if check.error %}error{% elif check.passed %}passed{% else %}failed{% endif %}">
+                        <div class="check-header">
+                            <span class="check-icon">{{ check_display.get(key, {}).get('icon', '🔎') }}</span>
+                            <span class="check-name">{{ check_display.get(key, {}).get('label', check.name) }}</span>
+                            <span class="check-weight">{{ check_display.get(key, {}).get('weight', '') }}</span>
+                        </div>
+                        <div class="check-score">
+                            {% if check.error %}
+                                <span class="score-error">Error</span>
+                            {% elif check.score is not none %}
+                                <span class="score-number {% if check.score >= 70 %}high{% elif check.score >= 40 %}medium{% else %}low{% endif %}">{{ check.score|round|int }}%</span>
+                            {% else %}
+                                <span class="score-na">N/A</span>
+                            {% endif %}
+                        </div>
+                        <div class="check-status">
+                            {% if check.error %}
+                                <span class="status-badge error">{{ check.error[:30] }}</span>
+                            {% elif check.passed %}
+                                <span class="status-badge passed">Passed</span>
+                            {% else %}
+                                <span class="status-badge failed">Flagged</span>
+                            {% endif %}
+                        </div>
+                        {% if check.details %}
+                        <div class="check-details">
+                            {% if key == 'bert_model' and check.details.label %}
+                                <span class="detail-item">Label: {{ check.details.label }}</span>
+                            {% endif %}
+                            {% if key == 'sublime' and check.details.verdict %}
+                                <span class="detail-item">Verdict: {{ check.details.verdict }}</span>
+                                {% if check.details.top_signals %}
+                                    <span class="detail-item">Signals: {{ check.details.top_signals|join(', ') }}</span>
+                                {% endif %}
+                            {% endif %}
+                            {% if key == 'header_mismatch' and check.details.mismatch %}
+                                <span class="detail-item">From: {{ check.details.from }}</span>
+                                <span class="detail-item">Reply-To: {{ check.details.reply_to }}</span>
+                            {% endif %}
+                            {% if key == 'urgency_keywords' and check.details.found_phrases %}
+                                <span class="detail-item">Found: {{ check.details.found_phrases|join(', ') }}</span>
+                            {% endif %}
+                            {% if key == 'html_threats' and check.details.threats_found %}
+                                <span class="detail-item">Threats: {{ check.details.threats_found[:3]|join(', ') }}{% if check.details.threats_found|length > 3 %}...{% endif %}</span>
+                            {% endif %}
+                            {% if key == 'shortened_urls' and check.details.shortened_domains %}
+                                <span class="detail-item">Shorteners: {{ check.details.shortened_domains|join(', ') }}</span>
+                            {% endif %}
+                            {% if key == 'suspicious_tlds' and check.details.suspicious_domains %}
+                                <span class="detail-item">Domains: {{ check.details.suspicious_domains|join(', ') }}</span>
+                            {% endif %}
+                            {% if key == 'dns_records' %}
+                                <span class="detail-item">Domain: {{ check.details.domain }}</span>
+                                <span class="detail-item">MX: {{ 'Yes' if check.details.has_mx else 'No' }} | A: {{ 'Yes' if check.details.has_a else 'No' }}</span>
+                            {% endif %}
+                            {% if key == 'spf_record' %}
+                                <span class="detail-item">SPF: {{ 'Found' if check.details.has_spf else 'Missing' }}</span>
+                            {% endif %}
+                            {% if key == 'domain_age' and check.details.new_domains %}
+                                <span class="detail-item">New: {{ check.details.new_domains|join(', ') }}</span>
+                            {% endif %}
+                            {% if key == 'urlscan' and check.details.url %}
+                                <span class="detail-item">URL: {{ check.details.url[:40] }}{% if check.details.url|length > 40 %}...{% endif %}</span>
+                            {% endif %}
+                            {% if key == 'virustotal' and check.details.attachments_scanned %}
+                                <span class="detail-item">Scanned: {{ check.details.attachments_scanned }} attachment(s)</span>
+                                {% if check.details.total_malicious %}
+                                    <span class="detail-item">Malicious: {{ check.details.total_malicious }}</span>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
 
