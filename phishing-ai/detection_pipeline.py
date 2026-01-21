@@ -115,6 +115,37 @@ class DetectionPipeline:
             except Exception:
                 pass  # Fall through to parse as-is
 
+        # Check if this looks like a proper email with headers
+        # Emails should have header lines like "From:", "Subject:", etc.
+        has_headers = any(
+            raw_email.strip().lower().startswith(h)
+            for h in ['from:', 'to:', 'subject:', 'date:', 'mime-version:', 'content-type:']
+        )
+
+        # Also check for header pattern in first few lines (Header-Name: value)
+        first_lines = raw_email.strip().split('\n')[:5]
+        header_pattern = any(
+            ':' in line and not line.startswith(' ') and len(line.split(':')[0]) < 50
+            for line in first_lines
+        )
+
+        # If no headers detected, treat as plain text body
+        if not has_headers and not header_pattern:
+            return {
+                "raw": raw_email,
+                "from": "",
+                "from_addr": "",
+                "to": "",
+                "subject": "(No subject)",
+                "reply_to": "",
+                "return_path": "",
+                "message_id": "",
+                "body_text": raw_email,
+                "body_html": "",
+                "full_text": f"Subject: (No subject)\n\n{raw_email}",
+                "attachments": []
+            }
+
         msg = message_from_string(raw_email)
 
         # Extract headers
@@ -826,10 +857,19 @@ class DetectionPipeline:
         indicators = self._build_indicators(results)
 
         # Extract scores for response
-        bert_result = results.get("bert_model", CheckResult(name=""))
+        bert_result = results.get("bert_model")
         # ai_score shows BERT's raw confidence in its prediction (not phishing likelihood)
-        ai_score = bert_result.details.get("confidence") if bert_result.details else bert_result.score
-        sublime_score = results.get("sublime", CheckResult(name="")).score
+        if bert_result and bert_result.details and "confidence" in bert_result.details:
+            ai_score = bert_result.details["confidence"]
+            logger.info(f"ai_score from confidence: {ai_score}")
+        elif bert_result and bert_result.score is not None:
+            ai_score = bert_result.score
+            logger.info(f"ai_score from score fallback: {ai_score}")
+        else:
+            ai_score = None
+            logger.warning(f"ai_score is None. bert_result={bert_result}")
+        sublime_result = results.get("sublime")
+        sublime_score = sublime_result.score if sublime_result else None
 
         return PipelineResult(
             verdict=verdict,
