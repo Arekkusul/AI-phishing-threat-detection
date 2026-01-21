@@ -7,11 +7,14 @@ import os
 import re
 import base64
 import hashlib
+import logging
 import concurrent.futures
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Literal
 from email import message_from_string
 import email.utils
+
+logger = logging.getLogger(__name__)
 
 import dns.resolver
 import whois
