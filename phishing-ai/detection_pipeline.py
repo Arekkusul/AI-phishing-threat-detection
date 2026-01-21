@@ -91,7 +91,7 @@ class DetectionPipeline:
                 model=model,
                 tokenizer=tokenizer,
                 truncation=True,
-                max_length=512
+                max_length=2048
             )
             self._model_loaded = True
         return self._phish_pipeline
