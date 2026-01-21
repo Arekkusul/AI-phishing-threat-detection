@@ -5,11 +5,12 @@ A production-ready phishing detection system that integrates with Microsoft Outl
 ## Features
 
 - **Outlook Add-in Integration**: Seamless taskpane that scans emails directly in Outlook
-- **Multi-Signal Detection**: 11 parallel detection checks with weighted scoring
+- **Quarantine Functionality**: One-click quarantine for suspicious emails
+- **Multi-Signal Detection**: 12 parallel detection checks with weighted scoring
 - **AI-Powered Analysis**: BERT model for phishing classification + Gemini for reasoning
 - **Threat Intelligence**: Integration with Sublime Security, VirusTotal, and URLScan.io
 - **Real-time Notifications**: Report phishing via Teams, Telegram, or WhatsApp
-- **Admin Dashboard**: View scan history, statistics, and reported threats
+- **Admin Dashboard**: Interactive charts, scan history, and full email review
 - **Result Caching**: Deduplication and caching for faster repeat scans
 - **Rate Limiting**: Protection against abuse with configurable limits
 - **Docker Deployment**: One-command deployment with PostgreSQL persistence
@@ -23,18 +24,19 @@ A production-ready phishing detection system that integrates with Microsoft Outl
 │                                 │    Cloudflare Tunnel   │                                     │
 │   - Scan Email button           │                        │  ┌─────────────────────────────┐   │
 │   - Auto-scan mode              │    POST /check         │  │   Parallel Detection        │   │
-│   - Report Phishing button      │◄──────────────────────┐│  │                             │   │
-│   - Verdict display             │   {verdict, scores,   ││  │  1. BERT Model (32%)        │   │
-│                                 │    reasons, indicators}││  │  2. Sublime Security (22%)  │   │
-└─────────────────────────────────┘                        ││  │  3. Header Mismatch (8%)    │   │
-                                                           ││  │  4. Urgency Keywords (8%)   │   │
-                                                           ││  │  5. URLScan.io (5%)         │   │
-                                                           ││  │  6. URL Shorteners (5%)     │   │
-                                                           ││  │  7. Suspicious TLDs (5%)    │   │
-                                                           ││  │  8. DNS Records (5%)        │   │
-                                                           ││  │  9. SPF Record (4%)         │   │
-                                                           ││  │  10. VirusTotal (3%)        │   │
-                                                           ││  │  11. Domain Age (3%)        │   │
+│   - Quarantine button           │◄──────────────────────┐│  │                             │   │
+│   - Report Phishing button      │   {verdict, scores,   ││  │  1. BERT Model (30%)        │   │
+│   - Verdict display             │    reasons, indicators}││  │  2. Sublime Security (20%)  │   │
+│                                 │                        ││  │  3. HTML Threats (8%)       │   │
+└─────────────────────────────────┘                        ││  │  4. Header Mismatch (7%)    │   │
+                                                           ││  │  5. Urgency Keywords (7%)   │   │
+                                                           ││  │  6. URLScan.io (5%)         │   │
+                                                           ││  │  7. URL Shorteners (5%)     │   │
+                                                           ││  │  8. Suspicious TLDs (4%)    │   │
+                                                           ││  │  9. DNS Records (4%)        │   │
+                                                           ││  │  10. VirusTotal (4%)        │   │
+                                                           ││  │  11. SPF Record (3%)        │   │
+                                                           ││  │  12. Domain Age (3%)        │   │
                                                            ││  │                             │   │
                                                            ││  │  + Gemini AI Reasoning      │   │
                                                            ││  └─────────────────────────────┘   │
@@ -81,20 +83,21 @@ curl http://localhost:5000/health
 
 ## Detection Pipeline
 
-The platform runs 11 detection checks in parallel and aggregates results using weighted scoring:
+The platform runs 12 detection checks in parallel and aggregates results using weighted scoring:
 
 | Check | Weight | Description |
 |-------|--------|-------------|
-| BERT Model | 32% | HuggingFace phishing classifier |
-| Sublime Security | 22% | Commercial attack score API |
-| Header Mismatch | 8% | From vs Reply-To comparison |
-| Urgency Keywords | 8% | Pressure language detection |
+| BERT Model | 30% | HuggingFace phishing classifier |
+| Sublime Security | 20% | Commercial attack score API |
+| HTML Threats | 8% | Hidden elements, suspicious scripts |
+| Header Mismatch | 7% | From vs Reply-To comparison |
+| Urgency Keywords | 7% | Pressure language detection |
 | URLScan.io | 5% | URL maliciousness scanning |
 | URL Shorteners | 5% | Detects bit.ly, t.co, etc. |
-| Suspicious TLDs | 5% | Flags .xyz, .top, .club, etc. |
-| DNS Records | 5% | Validates sender domain |
-| SPF Record | 4% | Email authentication check |
-| VirusTotal | 3% | Hash reputation lookup |
+| Suspicious TLDs | 4% | Flags .xyz, .top, .club, etc. |
+| DNS Records | 4% | Validates sender domain |
+| VirusTotal | 4% | Hash reputation lookup |
+| SPF Record | 3% | Email authentication check |
 | Domain Age | 3% | WHOIS creation date check |
 
 ### Verdict Thresholds
@@ -192,6 +195,10 @@ Report a phishing email and trigger webhook notifications.
 | `TEAMS_WEBHOOK_URL` | No | Microsoft Teams notifications |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram notifications |
 | `TELEGRAM_CHAT_ID` | No | Telegram chat destination |
+| `WHATSAPP_TWILIO_SID` | No | Twilio Account SID |
+| `WHATSAPP_TWILIO_TOKEN` | No | Twilio Auth Token |
+| `WHATSAPP_FROM` | No | Twilio WhatsApp number |
+| `WHATSAPP_TO` | No | Destination phone number |
 | `CLOUDFLARE_TUNNEL_URL` | No | Your tunnel URL for CORS |
 
 ### Feature Flags
@@ -202,6 +209,53 @@ Report a phishing email and trigger webhook notifications.
 | `ENABLE_VIRUSTOTAL` | true | Enable VirusTotal integration |
 | `CACHE_ENABLED` | true | Enable result caching |
 | `CACHE_TTL_HOURS` | 24 | Cache time-to-live |
+
+## Notification Setup
+
+### Telegram Bot
+
+1. **Create a bot** via [@BotFather](https://t.me/botfather):
+   - Send `/newbot` and follow prompts
+   - Copy the **bot token**
+
+2. **Get your Chat ID**:
+   - Start a chat with your bot or add it to a group
+   - Send a message
+   - Visit: `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   - Find `"chat":{"id":123456789}`
+
+3. **Add to `.env`**:
+   ```bash
+   TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+   TELEGRAM_CHAT_ID=-1001234567890
+   ```
+
+### WhatsApp (Twilio)
+
+1. **Create Twilio account** at [twilio.com](https://www.twilio.com/)
+
+2. **Enable WhatsApp Sandbox**:
+   - Go to Console > Messaging > Try it out > Send a WhatsApp message
+   - Follow instructions to join sandbox
+
+3. **Get credentials** from Twilio Console
+
+4. **Add to `.env`**:
+   ```bash
+   WHATSAPP_TWILIO_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   WHATSAPP_TWILIO_TOKEN=your_auth_token
+   WHATSAPP_FROM=+14155238886
+   WHATSAPP_TO=+1234567890
+   ```
+
+### Microsoft Teams
+
+1. In Teams, go to Channel > Connectors > Incoming Webhook
+2. Create webhook and copy URL
+3. Add to `.env`:
+   ```bash
+   TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
+   ```
 
 ## Outlook Add-in Setup
 
@@ -233,6 +287,30 @@ Update the API endpoint in `src/taskpane/taskpane.js`:
 ```javascript
 const API_BASE = "https://your-tunnel-url.trycloudflare.com";
 ```
+
+### Taskpane Features
+
+- **Scan Email**: Analyze current email for phishing indicators
+- **Auto Mode**: Automatically scan when switching emails
+- **Quarantine**: Move suspicious emails to Junk folder (requires permissions)
+- **Report**: Send phishing reports to security team via webhooks
+
+## Admin Dashboard
+
+Access the admin dashboard at `/admin` to view:
+
+- **Dashboard**: Interactive pie charts and scan statistics
+- **Scans**: Browse all email analyses with full details
+- **Email Viewer**: View original email content (raw + rendered HTML)
+- **Reports**: View user-reported phishing
+- **Audit Log**: System activity log
+
+Protect with `ADMIN_KEY` environment variable.
+
+### Dashboard Charts
+
+- **Verdict Distribution**: Doughnut chart showing Safe/Suspicious/Phishing breakdown
+- **Daily Trend**: Stacked bar chart showing scan activity over time
 
 ## Cloudflare Tunnel Setup
 
@@ -270,22 +348,11 @@ Uncomment the `cloudflared` service in `docker-compose.yml`.
 
 In Cloudflare dashboard, add a CNAME record pointing to your tunnel.
 
-## Admin Dashboard
-
-Access the admin dashboard at `/admin` to view:
-
-- **Dashboard**: Scan statistics and trends
-- **Scans**: Browse all email analyses
-- **Reports**: View user-reported phishing
-- **Audit Log**: System activity log
-
-Protect with `ADMIN_KEY` environment variable.
-
 ## Database Schema
 
 PostgreSQL tables:
 
-- `scans` - Email scan results with full check details
+- `scans` - Email scan results with full check details and email body
 - `reports` - User-reported phishing emails
 - `api_keys` - Multi-tenant API key management
 - `audit_log` - Request/event logging
@@ -293,6 +360,15 @@ PostgreSQL tables:
 Views for admin:
 - `recent_scans_summary` - Daily scan counts
 - `top_reported_domains` - Most reported sender domains
+
+### Database Migration
+
+If upgrading from a previous version, run:
+
+```bash
+docker compose exec db psql -U phishing -d phishing -c \
+  "ALTER TABLE scans ADD COLUMN IF NOT EXISTS email_body TEXT;"
+```
 
 ## Development
 
@@ -335,9 +411,16 @@ ai-phishing/
 │   ├── requirements.txt        # Python dependencies
 │   ├── Dockerfile              # Container build
 │   ├── init.sql                # Database schema
+│   ├── static/                 # CSS stylesheets
 │   └── templates/              # HTML templates
-│       ├── index.html          # Web analyzer
+│       ├── index.html          # Web analyzer (shows all checks)
 │       ├── admin/              # Admin dashboard
+│       │   ├── base.html       # Admin layout
+│       │   ├── dashboard.html  # Stats + charts
+│       │   ├── scans.html      # Scan history
+│       │   ├── scan_detail.html # Full scan + email viewer
+│       │   ├── reports.html    # Phishing reports
+│       │   └── audit.html      # Audit log
 │       └── errors/             # Error pages
 │
 └── outlook-phishing-dashboard/ # Outlook Add-in
@@ -347,7 +430,7 @@ ai-phishing/
     └── src/
         └── taskpane/
             ├── taskpane.html   # Add-in UI
-            ├── taskpane.js     # Email extraction & API calls
+            ├── taskpane.js     # Email extraction, API calls, quarantine
             └── taskpane.css    # Dark theme styling
 ```
 
@@ -359,7 +442,8 @@ ai-phishing/
 - **Input Validation**: 25MB email size limit
 - **Non-root Container**: Runs as unprivileged user
 - **Cloudflare Protection**: TLS and DDoS mitigation
-- **Minimal Data Retention**: Only stores metadata, not full emails
+- **Sandboxed Email Preview**: HTML rendered in sandboxed iframe
+- **Email Storage**: Full email content stored for admin review
 
 ## Troubleshooting
 
@@ -383,18 +467,27 @@ docker compose logs postgres
 docker compose exec phishing-api env | grep DATABASE_URL
 ```
 
-### Model loading slow
+### BERT model errors
 
-The BERT model is pre-downloaded during Docker build. If startup is slow:
+If you see token length errors:
+```
+Token indices sequence length is longer than the specified maximum sequence length
+```
 
+The model automatically truncates to 512 tokens. Rebuild if issues persist:
 ```bash
-# Rebuild to cache model
 docker compose build --no-cache phishing-api
 ```
 
 ### CORS errors in Outlook
 
 Ensure `CLOUDFLARE_TUNNEL_URL` or `ALLOWED_ORIGIN` is set correctly.
+
+### Quarantine not working
+
+- Ensure manifest has `ReadWriteMailbox` permission
+- Re-sideload the add-in after manifest changes
+- Check Outlook version supports EWS/REST API
 
 ## License
 

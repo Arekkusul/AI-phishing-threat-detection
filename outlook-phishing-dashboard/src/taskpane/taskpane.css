@@ -36,3 +36,15 @@ h2 { margin: 0 0 12px; font-size: 18px; }
 .slider::after { content:""; width:18px; height:18px; border-radius:999px; background:#fff; position:absolute; top:2px; left:2px; transition:.2s; }
 .toggle input:checked + .slider::after { transform: translateX(20px); }
 .toggle .label { color: var(--muted); font-size: 12px; }
+
+/* Quarantine Section */
+.quarantine-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.quarantine-section.hidden { display: none; }
+.quarantine-warning { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #ff980015; border: 1px solid #ff9800; border-radius: 8px; margin-bottom: 10px; }
+.warning-icon { font-size: 16px; }
+.warning-text { color: #ff9800; font-size: 13px; font-weight: 500; }
+.btn.quarantine { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: #ff572233; border-color: #ff5722; color: #ff8a65; font-weight: 600; padding: 12px; }
+.btn.quarantine:hover:not(:disabled) { background: #ff572244; }
+.btn.quarantine:disabled { opacity: 0.5; }
+.btn.quarantine.success { background: #00c85333; border-color: #00c853; color: #69f0ae; }
+.btn-icon { font-size: 14px; }

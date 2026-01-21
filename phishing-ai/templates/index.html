@@ -115,7 +115,7 @@ Please click the link below to verify your account..."></textarea>
                         </div>
                         <div class="check-status">
                             {% if check.error %}
-                                <span class="status-badge error">{{ check.error[:30] }}</span>
+                                <span class="status-badge error">{{ check.error|truncate(30, True, '...') }}</span>
                             {% elif check.passed %}
                                 <span class="status-badge passed">Passed</span>
                             {% else %}

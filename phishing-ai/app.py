@@ -402,6 +402,7 @@ def check_email():
             email_subject=email_data.get("subject"),
             email_from=email_data.get("from_addr"),
             email_to=email_data.get("to"),
+            email_body=eml,
             ip_address=request.remote_addr
         )
 
@@ -640,6 +641,7 @@ def index():
                     check_results=pipeline_result.check_results,
                     email_subject=email_data.get("subject"),
                     email_from=email_data.get("from_addr"),
+                    email_body=email_text,
                     ip_address=request.remote_addr
                 )
 

@@ -42,6 +42,27 @@
     </div>
 </div>
 
+<!-- Charts Row -->
+<div class="charts-row">
+    <div class="card chart-card">
+        <div class="card-header">
+            <h2 class="card-title">Verdict Distribution</h2>
+        </div>
+        <div class="chart-container">
+            <canvas id="verdictPieChart"></canvas>
+        </div>
+        <div class="chart-legend" id="verdictLegend"></div>
+    </div>
+    <div class="card chart-card">
+        <div class="card-header">
+            <h2 class="card-title">Daily Scan Trend</h2>
+        </div>
+        <div class="chart-container-wide">
+            <canvas id="dailyTrendChart"></canvas>
+        </div>
+    </div>
+</div>
+
 <div class="card">
     <div class="card-header">
         <h2 class="card-title">Scan Activity (Last 14 Days)</h2>
@@ -150,4 +171,172 @@
 </div>
 
 {% endif %}
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Data from Flask
+    const safeCount = {{ scan_stats.safe_count or 0 }};
+    const suspiciousCount = {{ scan_stats.suspicious_count or 0 }};
+    const phishingCount = {{ scan_stats.phishing_count or 0 }};
+    const totalScans = safeCount + suspiciousCount + phishingCount;
+
+    // Color scheme
+    const colors = {
+        safe: '#22c55e',
+        suspicious: '#eab308',
+        phishing: '#ef4444',
+        safeBg: 'rgba(34, 197, 94, 0.8)',
+        suspiciousBg: 'rgba(234, 179, 8, 0.8)',
+        phishingBg: 'rgba(239, 68, 68, 0.8)'
+    };
+
+    // Verdict Pie Chart
+    if (totalScans > 0) {
+        const pieCtx = document.getElementById('verdictPieChart').getContext('2d');
+        new Chart(pieCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Safe', 'Suspicious', 'Phishing'],
+                datasets: [{
+                    data: [safeCount, suspiciousCount, phishingCount],
+                    backgroundColor: [colors.safeBg, colors.suspiciousBg, colors.phishingBg],
+                    borderColor: ['#0f172a', '#0f172a', '#0f172a'],
+                    borderWidth: 3,
+                    hoverOffset: 10
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '60%',
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#f1f5f9',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        padding: 12,
+                        callbacks: {
+                            label: function(context) {
+                                const value = context.raw;
+                                const percentage = ((value / totalScans) * 100).toFixed(1);
+                                return `${context.label}: ${value} (${percentage}%)`;
+                            }
+                        }
+                    }
+                },
+                animation: {
+                    animateRotate: true,
+                    animateScale: true
+                }
+            }
+        });
+
+        // Custom legend
+        const legendHtml = `
+            <div class="legend-item">
+                <span class="legend-color" style="background: ${colors.safe}"></span>
+                <span class="legend-label">Safe</span>
+                <span class="legend-value">${safeCount} (${((safeCount/totalScans)*100).toFixed(1)}%)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: ${colors.suspicious}"></span>
+                <span class="legend-label">Suspicious</span>
+                <span class="legend-value">${suspiciousCount} (${((suspiciousCount/totalScans)*100).toFixed(1)}%)</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: ${colors.phishing}"></span>
+                <span class="legend-label">Phishing</span>
+                <span class="legend-value">${phishingCount} (${((phishingCount/totalScans)*100).toFixed(1)}%)</span>
+            </div>
+        `;
+        document.getElementById('verdictLegend').innerHTML = legendHtml;
+    }
+
+    // Daily Trend Chart
+    const dailyStats = {{ daily_stats | tojson }};
+    if (dailyStats && dailyStats.length > 0) {
+        // Reverse to show oldest first
+        const reversed = [...dailyStats].reverse();
+        const labels = reversed.map(d => {
+            const date = new Date(d.scan_date);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        });
+
+        const trendCtx = document.getElementById('dailyTrendChart').getContext('2d');
+        new Chart(trendCtx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Safe',
+                        data: reversed.map(d => d.safe),
+                        backgroundColor: colors.safeBg,
+                        borderRadius: 4
+                    },
+                    {
+                        label: 'Suspicious',
+                        data: reversed.map(d => d.suspicious),
+                        backgroundColor: colors.suspiciousBg,
+                        borderRadius: 4
+                    },
+                    {
+                        label: 'Phishing',
+                        data: reversed.map(d => d.phishing),
+                        backgroundColor: colors.phishingBg,
+                        borderRadius: 4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index'
+                },
+                scales: {
+                    x: {
+                        stacked: true,
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true,
+                        grid: { color: '#334155' },
+                        ticks: { color: '#94a3b8' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: '#94a3b8',
+                            padding: 20,
+                            usePointStyle: true,
+                            pointStyle: 'circle'
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#f1f5f9',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
 {% endblock %}

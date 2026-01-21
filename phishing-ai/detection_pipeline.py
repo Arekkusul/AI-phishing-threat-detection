@@ -86,7 +86,13 @@ class DetectionPipeline:
             from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
             tokenizer = AutoTokenizer.from_pretrained("ElSlay/BERT-Phishing-Email-Model")
             model = AutoModelForSequenceClassification.from_pretrained("ElSlay/BERT-Phishing-Email-Model")
-            self._phish_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer)
+            self._phish_pipeline = pipeline(
+                "text-classification",
+                model=model,
+                tokenizer=tokenizer,
+                truncation=True,
+                max_length=512
+            )
             self._model_loaded = True
         return self._phish_pipeline
 

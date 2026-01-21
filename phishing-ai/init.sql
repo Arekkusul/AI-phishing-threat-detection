@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS scans (
     email_from VARCHAR(255),
     email_to VARCHAR(255),
 
+    -- Email body content (for admin review)
+    email_body TEXT,
+
     -- Audit fields
     scanned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     scanned_by VARCHAR(255),

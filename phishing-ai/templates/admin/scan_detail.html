@@ -107,6 +107,58 @@
 </div>
 {% endif %}
 
+{% if scan.email_body %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Original Email Content</h2>
+        <button class="btn btn-secondary" onclick="toggleEmailView()">Toggle HTML View</button>
+    </div>
+    <div id="email-raw" class="email-content">
+        <pre class="email-viewer">{{ scan.email_body }}</pre>
+    </div>
+    <div id="email-rendered" class="email-content" style="display: none;">
+        <div class="email-rendered-warning">
+            <strong>Warning:</strong> This is a rendered preview. External resources and scripts are blocked.
+        </div>
+        <iframe id="email-iframe" sandbox="allow-same-origin" class="email-iframe"></iframe>
+    </div>
+</div>
+<script>
+    function toggleEmailView() {
+        const raw = document.getElementById('email-raw');
+        const rendered = document.getElementById('email-rendered');
+        const iframe = document.getElementById('email-iframe');
+
+        if (raw.style.display === 'none') {
+            raw.style.display = 'block';
+            rendered.style.display = 'none';
+        } else {
+            raw.style.display = 'none';
+            rendered.style.display = 'block';
+
+            // Extract HTML body and render in iframe
+            const emailBody = {{ scan.email_body | tojson }};
+            const htmlMatch = emailBody.match(/<html[\s\S]*<\/html>/i) ||
+                              emailBody.match(/<body[\s\S]*<\/body>/i);
+            const htmlContent = htmlMatch ? htmlMatch[0] : '<pre>' + emailBody.replace(/</g, '&lt;') + '</pre>';
+
+            iframe.srcdoc = `
+                <html>
+                <head>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 1rem; background: #1e293b; color: #f1f5f9; }
+                        a { color: #3b82f6; }
+                        img { max-width: 100%; }
+                    </style>
+                </head>
+                <body>${htmlContent}</body>
+                </html>
+            `;
+        }
+    }
+</script>
+{% endif %}
+
 <div style="margin-top: 1.5rem;">
     <a href="/admin/scans" class="btn btn-secondary">Back to Scans</a>
 </div>

@@ -127,6 +127,7 @@ class Database:
             email_subject VARCHAR(500),
             email_from VARCHAR(255),
             email_to VARCHAR(255),
+            email_body TEXT,
             scanned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             scanned_by VARCHAR(255),
             ip_address INET,
@@ -235,6 +236,7 @@ class Database:
         email_subject: Optional[str] = None,
         email_from: Optional[str] = None,
         email_to: Optional[str] = None,
+        email_body: Optional[str] = None,
         scanned_by: Optional[str] = None,
         ip_address: Optional[str] = None
     ) -> Optional[str]:
@@ -263,12 +265,12 @@ class Database:
             INSERT INTO scans (
                 email_hash, verdict, confidence, ai_score, sublime_score,
                 reasons, indicators, check_results,
-                email_subject, email_from, email_to,
+                email_subject, email_from, email_to, email_body,
                 scanned_by, ip_address
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s,
-                %s, %s, %s,
+                %s, %s, %s, %s,
                 %s, %s
             )
             RETURNING id
@@ -289,6 +291,7 @@ class Database:
                         (email_subject or "")[:500],
                         (email_from or "")[:255],
                         (email_to or "")[:255],
+                        email_body,
                         scanned_by,
                         ip_address
                     ))
@@ -337,7 +340,7 @@ class Database:
         sql = """
             SELECT id, email_hash, verdict, confidence, ai_score, sublime_score,
                    reasons, indicators, check_results,
-                   email_subject, email_from, email_to,
+                   email_subject, email_from, email_to, email_body,
                    scanned_at, scanned_by, ip_address
             FROM scans
             WHERE id = %s

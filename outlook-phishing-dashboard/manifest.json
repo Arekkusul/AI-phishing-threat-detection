@@ -37,6 +37,14 @@
                 {
                     "name": "MailboxItem.Read.User",
                     "type": "Delegated"
+                },
+                {
+                    "name": "MailboxItem.ReadWrite.User",
+                    "type": "Delegated"
+                },
+                {
+                    "name": "Mailbox.ReadWrite.User",
+                    "type": "Delegated"
                 }
             ]
         }
