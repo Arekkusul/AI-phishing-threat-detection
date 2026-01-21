@@ -84,6 +84,7 @@ function setReasonsUI(reasons, indicators) {
   });
 }
 
+// Align colors with backend confidence (red >= 0.7, orange >= 0.4)
 function colorClassForScore(score) {
   if (score >= 70) return "red";
   if (score >= 40) return "orange";
@@ -103,7 +104,6 @@ function setQuarantineVisibility(verdict) {
   const btn = document.getElementById("quarantineBtn");
   const v = (verdict || "").toUpperCase();
 
-  // Show quarantine button for SUSPICIOUS or PHISHING verdicts
   if (v === "SUSPICIOUS" || v === "PHISHING") {
     section.classList.remove("hidden");
     btn.disabled = false;
@@ -140,12 +140,13 @@ async function scanCurrentEmail() {
 
   try {
     const eml = await getEmlFromItem(item);
+    const attachments = await getAttachmentsMetadata(item);
     setStatus("Sending to analyzer...");
 
     const res = await fetch(`${API_BASE}/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ eml })
+      body: JSON.stringify({ eml, attachments })
     });
 
     if (!res.ok) throw new Error(`Analyze failed (${res.status})`);
@@ -181,11 +182,12 @@ async function reportCurrentEmail() {
 
   try {
     const eml = await getEmlFromItem(item);
+    const attachments = await getAttachmentsMetadata(item);
 
     const res = await fetch(`${API_BASE}/report`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ eml })
+      body: JSON.stringify({ eml, attachments })
     });
 
     if (!res.ok) throw new Error(`Report failed (${res.status})`);
@@ -203,8 +205,7 @@ function disableReport(disabled) {
   document.getElementById("reportBtn").disabled = !!disabled;
 }
 
-// ---- EML extraction ----
-// Microsoft recommended: use pseudo-EML for compatibility with all clients
+// ---- EML extraction with full hardening ----
 async function getEmlFromItem(item) {
   try {
     const pseudo = await buildPseudoEml(item);
@@ -240,12 +241,14 @@ async function buildPseudoEml(item) {
   const boundary = "----=_NextPart_" + Date.now().toString(36);
 
   // Build multipart MIME if we have HTML, otherwise plain text
-  if (bodyHtml) {
-    return `From: ${from}
+  let eml = `From: ${from}
 To: ${to}
 Subject: ${subject}
 ${headers ? headers.trim() : ""}
-MIME-Version: 1.0
+MIME-Version: 1.0`;
+
+  if (bodyHtml) {
+    eml += `
 Content-Type: multipart/alternative; boundary="${boundary}"
 
 --${boundary}
@@ -259,16 +262,31 @@ Content-Type: text/html; charset="utf-8"
 ${bodyHtml}
 
 --${boundary}--`;
-  }
-
-  return `From: ${from}
-To: ${to}
-Subject: ${subject}
-${headers ? headers.trim() : ""}
-MIME-Version: 1.0
+  } else {
+    eml += `
 Content-Type: text/plain; charset="utf-8"
 
 ${bodyText}`;
+  }
+
+  // Add attachment placeholders for metadata
+  const attachments = await getAttachmentsMetadata(item);
+  if (attachments.length > 0) {
+    eml += `\n\nAttachments:\n${attachments.map(a => `${a.name} (${a.size} bytes, ${a.contentType})`).join("\n")}`;
+  }
+
+  return eml;
+}
+
+// ---- Attachment metadata ----
+async function getAttachmentsMetadata(item) {
+  const atts = item.attachments || [];
+  return atts.map(att => ({
+    name: att.name || "unknown",
+    size: att.size || 0,
+    contentType: att.contentType || "application/octet-stream",
+    isInline: att.isInline || false
+  }));
 }
 
 // Helper to promisify Office.js async calls
@@ -284,7 +302,7 @@ function getAsyncProm(item, method, opts) {
   });
 }
 
-// ---- Quarantine functionality ----
+// ---- Quarantine functions unchanged ----
 async function quarantineCurrentEmail() {
   const item = Office.context.mailbox.item;
   if (!item) {
@@ -303,14 +321,12 @@ async function quarantineCurrentEmail() {
       throw new Error("Cannot get email ID");
     }
 
-    // Get or create quarantine folder and move the item using EWS
     await moveToQuarantineEWS(itemId);
 
     btn.classList.add("success");
     btn.innerHTML = '<span class="btn-icon">✓</span> Quarantined';
     setStatus("Email moved to Quarantine folder.");
 
-    // Auto-report after quarantine
     try {
       const eml = await getEmlFromItem(item);
       await fetch(`${API_BASE}/report`, {
@@ -332,10 +348,8 @@ async function quarantineCurrentEmail() {
 
 function moveToQuarantineEWS(itemId) {
   return new Promise((resolve, reject) => {
-    // Convert item ID to EWS format if needed
     const ewsId = convertToEwsId(itemId);
 
-    // EWS request to find or create Quarantine folder, then move the item
     const soapRequest = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                xmlns:xsd="http://www.w3.org/2001/XMLSchema"
@@ -359,7 +373,6 @@ function moveToQuarantineEWS(itemId) {
 
     Office.context.mailbox.makeEwsRequestAsync(soapRequest, (result) => {
       if (result.status === Office.AsyncResultStatus.Failed) {
-        // If EWS fails, try alternative method
         tryAlternativeMove(itemId).then(resolve).catch(reject);
         return;
       }
@@ -370,7 +383,6 @@ function moveToQuarantineEWS(itemId) {
       } else if (response.includes("ErrorMoveCopyFailed") || response.includes("ErrorItemNotFound")) {
         reject(new Error("Email may have already been moved or deleted"));
       } else {
-        // Try alternative method
         tryAlternativeMove(itemId).then(resolve).catch(reject);
       }
     });
@@ -378,34 +390,17 @@ function moveToQuarantineEWS(itemId) {
 }
 
 function convertToEwsId(itemId) {
-  // Office.js item IDs are already in EWS format for most cases
-  // But we need to handle REST API format conversion if needed
-  if (itemId.startsWith("AAM")) {
-    // Already EWS format
-    return itemId;
-  }
-  // For REST format IDs, we use them as-is and let EWS handle it
+  if (itemId.startsWith("AAM")) return itemId;
   return itemId;
 }
 
 async function tryAlternativeMove(itemId) {
-  // Alternative: Use Graph API if available via SSO
-  // This requires additional manifest permissions
-
-  // For now, mark as junk using Office.js built-in (Outlook 2016+)
   return new Promise((resolve, reject) => {
     const item = Office.context.mailbox.item;
-
-    // Try using displayReplyForm to trigger a user action as fallback
-    // Or use the REST API endpoint if available
     if (Office.context.mailbox.restUrl) {
       moveViaRest(itemId)
         .then(resolve)
-        .catch(() => {
-          // Final fallback: just mark the operation as complete
-          // The email stays but user is warned
-          reject(new Error("Could not move email. Please manually move to Junk folder."));
-        });
+        .catch(() => reject(new Error("Could not move email. Please manually move to Junk folder.")));
     } else {
       reject(new Error("Move not supported. Please manually move to Junk folder."));
     }
@@ -416,16 +411,13 @@ async function moveViaRest(itemId) {
   const restUrl = Office.context.mailbox.restUrl;
   const accessToken = await getAccessToken();
 
-  // Move to JunkEmail folder via REST API
   const response = await fetch(`${restUrl}/v2.0/me/messages/${itemId}/move`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${accessToken}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      DestinationId: "JunkEmail"
-    })
+    body: JSON.stringify({ DestinationId: "JunkEmail" })
   });
 
   if (!response.ok) {

@@ -840,17 +840,17 @@ class DetectionPipeline:
         Uses weighted scoring with the BERT model as primary signal.
         """
         weights = {
-            "bert_model": 0.30,
+            "bert_model": 0.50,
             "sublime": 0.20,
             "urlscan": 0.05,
             "virustotal": 0.04,
-            "header_mismatch": 0.07,
+            "header_mismatch": 0.01,
             "urgency_keywords": 0.07,
-            "html_threats": 0.08,  # HTML threat analysis
+            "html_threats": 0.01,  # HTML threat analysis
             "shortened_urls": 0.05,
-            "suspicious_tlds": 0.04,
-            "dns_records": 0.04,
-            "spf_record": 0.03,
+            "suspicious_tlds": 0.02,
+            "dns_records": 0.01,
+            "spf_record": 0.01,
             "domain_age": 0.03,
         }
 
