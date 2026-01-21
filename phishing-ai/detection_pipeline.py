@@ -91,7 +91,7 @@ class DetectionPipeline:
                 model=model,
                 tokenizer=tokenizer,
                 truncation=True,
-                max_length=2048
+                max_length=1024
             )
             self._model_loaded = True
         return self._phish_pipeline
@@ -837,42 +837,71 @@ class DetectionPipeline:
     def _aggregate_results(self, results: Dict[str, CheckResult]) -> tuple[Verdict, float]:
         """
         Aggregate check results into final verdict and confidence.
-        Uses weighted scoring with the BERT model as primary signal.
+        Uses a hybrid approach: weighted average + boost for strong signals.
         """
         weights = {
             "bert_model": 0.50,
             "sublime": 0.20,
             "urlscan": 0.05,
             "virustotal": 0.04,
-            "header_mismatch": 0.01,
-            "urgency_keywords": 0.07,
-            "html_threats": 0.01,  # HTML threat analysis
-            "shortened_urls": 0.05,
+            "header_mismatch": 0.03,
+            "urgency_keywords": 0.08,
+            "html_threats": 0.02,
+            "shortened_urls": 0.03,
             "suspicious_tlds": 0.02,
             "dns_records": 0.01,
             "spf_record": 0.01,
-            "domain_age": 0.03,
+            "domain_age": 0.01,
         }
 
         total_weight = 0
         weighted_score = 0
+        high_signals = []  # Track checks that flagged something
 
         for name, result in results.items():
             if result.score is not None and name in weights:
                 weight = weights[name]
-                weighted_score += result.score * weight
-                total_weight += weight
+                # Only count checks with scores > 0 toward weighted average
+                if result.score > 0:
+                    weighted_score += result.score * weight
+                    total_weight += weight
+                    if result.score >= 50:
+                        high_signals.append((name, result.score))
 
-        # Normalize
+        # Calculate base confidence from checks that flagged something
         if total_weight > 0:
             confidence = weighted_score / total_weight
         else:
-            confidence = 50  # Uncertain
+            confidence = 0  # No signals = safe
+
+        # Boost: If BERT or Sublime has high confidence, use it as floor
+        bert_result = results.get("bert_model")
+        sublime_result = results.get("sublime")
+
+        if bert_result and bert_result.score is not None:
+            # If BERT says phishing with >50% confidence, ensure minimum score
+            if bert_result.score >= 50:
+                confidence = max(confidence, bert_result.score * 0.8)
+            # If BERT is very confident (>70%), trust it heavily
+            if bert_result.score >= 70:
+                confidence = max(confidence, bert_result.score * 0.9)
+
+        if sublime_result and sublime_result.score is not None and sublime_result.score >= 60:
+            confidence = max(confidence, sublime_result.score * 0.7)
+
+        # Boost for multiple signals (defense in depth)
+        if len(high_signals) >= 3:
+            confidence = min(confidence * 1.15, 100)
+        elif len(high_signals) >= 2:
+            confidence = min(confidence * 1.1, 100)
+
+        # Cap at 100
+        confidence = min(confidence, 100)
 
         # Determine verdict
-        if confidence >= 70:
+        if confidence >= 65:
             verdict = "PHISHING"
-        elif confidence >= 40:
+        elif confidence >= 35:
             verdict = "SUSPICIOUS"
         else:
             verdict = "SAFE"
