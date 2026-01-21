@@ -204,9 +204,37 @@ async function buildPseudoEml(item) {
     bodyText = await getAsyncProm(item, item.body.getAsync, { coercionType: Office.CoercionType.Text });
   } catch {}
 
+  let bodyHtml = "";
+  try {
+    bodyHtml = await getAsyncProm(item, item.body.getAsync, { coercionType: Office.CoercionType.Html });
+  } catch {}
+
   const subject = item.subject || "";
   const from = item.from?.emailAddress || item.from?.displayName || "";
   const to = (item.to || []).map(x => x.emailAddress || x.displayName).join(", ");
+  const boundary = "----=_NextPart_" + Date.now().toString(36);
+
+  // Build multipart MIME if we have HTML, otherwise plain text
+  if (bodyHtml) {
+    return `From: ${from}
+To: ${to}
+Subject: ${subject}
+${headers ? headers.trim() : ""}
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="${boundary}"
+
+--${boundary}
+Content-Type: text/plain; charset="utf-8"
+
+${bodyText}
+
+--${boundary}
+Content-Type: text/html; charset="utf-8"
+
+${bodyHtml}
+
+--${boundary}--`;
+  }
 
   return `From: ${from}
 To: ${to}

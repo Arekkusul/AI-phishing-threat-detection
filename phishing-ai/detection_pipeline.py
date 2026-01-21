@@ -309,6 +309,126 @@ class DetectionPipeline:
             details={"suspicious_domains": suspicious}
         )
 
+    def check_html_threats(self, email_data: Dict) -> CheckResult:
+        """Analyze HTML body for phishing threats.
+
+        Checks for:
+        - Hidden/invisible elements (display:none, tiny fonts, etc.)
+        - Mismatched link text vs href (shows paypal.com, links to malicious.xyz)
+        - JavaScript/event handlers
+        - Form submissions to external URLs
+        - Data URIs (can hide malicious content)
+        - IP address URLs
+        - Excessive URL encoding
+        """
+        html = email_data.get("body_html", "")
+        if not html or len(html) < 50:
+            return CheckResult(
+                name="html_threats",
+                passed=True,
+                score=0,
+                details={"skipped": True, "reason": "No HTML body"}
+            )
+
+        threats = []
+        threat_score = 0
+
+        # 1. Check for hidden/invisible elements
+        hidden_patterns = [
+            (r'display\s*:\s*none', "Hidden element (display:none)"),
+            (r'visibility\s*:\s*hidden', "Hidden element (visibility:hidden)"),
+            (r'font-size\s*:\s*[01]px', "Tiny font (0-1px)"),
+            (r'opacity\s*:\s*0[^.]', "Invisible element (opacity:0)"),
+            (r'height\s*:\s*[01]px', "Tiny element (1px height)"),
+            (r'width\s*:\s*[01]px', "Tiny element (1px width)"),
+            (r'position\s*:\s*absolute[^>]*left\s*:\s*-\d{3,}', "Off-screen element"),
+        ]
+        for pattern, desc in hidden_patterns:
+            if re.search(pattern, html, re.IGNORECASE):
+                threats.append(desc)
+                threat_score += 15
+
+        # 2. Check for JavaScript/event handlers
+        js_patterns = [
+            (r'<script[^>]*>', "Embedded JavaScript"),
+            (r'javascript:', "JavaScript URL"),
+            (r'on(click|load|error|mouseover|mouseout|focus|blur)\s*=', "Event handler"),
+            (r'eval\s*\(', "eval() usage"),
+            (r'document\.(write|cookie|location)', "DOM manipulation"),
+        ]
+        for pattern, desc in js_patterns:
+            if re.search(pattern, html, re.IGNORECASE):
+                threats.append(desc)
+                threat_score += 25
+
+        # 3. Check for form submissions
+        form_match = re.search(r'<form[^>]*action\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+        if form_match:
+            action_url = form_match.group(1)
+            if action_url.startswith('http'):
+                threats.append(f"Form submits to external URL")
+                threat_score += 20
+
+        # 4. Check for data URIs (can hide malicious content)
+        if re.search(r'data:[^;]+;base64,', html, re.IGNORECASE):
+            threats.append("Data URI detected (can hide malicious content)")
+            threat_score += 15
+
+        # 5. Check for mismatched link text vs href
+        link_pattern = r'<a[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>([^<]+)</a>'
+        for match in re.finditer(link_pattern, html, re.IGNORECASE):
+            href = match.group(1).lower()
+            text = match.group(2).lower().strip()
+
+            # Skip if text is not a domain-like string
+            if not re.match(r'^[a-z0-9][-a-z0-9.]*\.[a-z]{2,}', text):
+                continue
+
+            # Extract domain from href
+            href_domain = ""
+            href_match = re.search(r'https?://([^/]+)', href)
+            if href_match:
+                href_domain = href_match.group(1).lower()
+                if href_domain.startswith('www.'):
+                    href_domain = href_domain[4:]
+
+            # Check if link text looks like a domain but doesn't match href
+            text_domain = text.replace('www.', '')
+            if href_domain and text_domain != href_domain:
+                # Check if it's a subdomain match
+                if not href_domain.endswith('.' + text_domain) and not text_domain.endswith('.' + href_domain):
+                    threats.append(f"Link text mismatch: '{text}' links to '{href_domain}'")
+                    threat_score += 30
+
+        # 6. Check for IP address URLs
+        if re.search(r'https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', html):
+            threats.append("URL with IP address instead of domain")
+            threat_score += 20
+
+        # 7. Check for excessive URL encoding
+        encoded_count = len(re.findall(r'%[0-9a-fA-F]{2}', html))
+        if encoded_count > 20:
+            threats.append(f"Excessive URL encoding ({encoded_count} encoded chars)")
+            threat_score += 10
+
+        # 8. Check for tracking pixels (1x1 images)
+        if re.search(r'<img[^>]*(width|height)\s*=\s*["\']?1["\']?[^>]*(width|height)\s*=\s*["\']?1', html, re.IGNORECASE):
+            threats.append("Tracking pixel detected (1x1 image)")
+            threat_score += 5
+
+        # Cap score at 100
+        threat_score = min(threat_score, 100)
+
+        return CheckResult(
+            name="html_threats",
+            passed=len(threats) == 0,
+            score=threat_score,
+            details={
+                "threats_found": threats[:10],  # Limit to 10 for readability
+                "threat_count": len(threats)
+            }
+        )
+
     def check_dns_records(self, email_data: Dict) -> CheckResult:
         """Verify sender domain has valid DNS records."""
         from_addr = email_data.get("from_addr", "")
@@ -643,6 +763,7 @@ class DetectionPipeline:
             ("urgency_keywords", lambda: self.check_urgency_keywords(email_data)),
             ("shortened_urls", lambda: self.check_shortened_urls(email_data)),
             ("suspicious_tlds", lambda: self.check_suspicious_tlds(email_data)),
+            ("html_threats", lambda: self.check_html_threats(email_data)),
             ("dns_records", lambda: self.check_dns_records(email_data)),
             ("spf_record", lambda: self.check_spf_record(email_data)),
             ("domain_age", lambda: self.check_domain_age(email_data)),
@@ -713,16 +834,17 @@ class DetectionPipeline:
         Uses weighted scoring with the BERT model as primary signal.
         """
         weights = {
-            "bert_model": 0.32,
-            "sublime": 0.22,
+            "bert_model": 0.30,
+            "sublime": 0.20,
             "urlscan": 0.05,
-            "virustotal": 0.03,
-            "header_mismatch": 0.08,
-            "urgency_keywords": 0.08,
+            "virustotal": 0.04,
+            "header_mismatch": 0.07,
+            "urgency_keywords": 0.07,
+            "html_threats": 0.08,  # HTML threat analysis
             "shortened_urls": 0.05,
-            "suspicious_tlds": 0.05,
-            "dns_records": 0.05,
-            "spf_record": 0.04,
+            "suspicious_tlds": 0.04,
+            "dns_records": 0.04,
+            "spf_record": 0.03,
             "domain_age": 0.03,
         }
 
@@ -780,6 +902,12 @@ class DetectionPipeline:
         if results.get("domain_age") and not results["domain_age"].passed:
             domains = results["domain_age"].details.get("new_domains", [])
             indicators.append(f"Recently registered domain: {', '.join(domains[:2])}")
+
+        html_result = results.get("html_threats")
+        if html_result and not html_result.passed:
+            threats = html_result.details.get("threats_found", [])
+            if threats:
+                indicators.append(f"HTML threats: {', '.join(threats[:2])}")
 
         urlscan_result = results.get("urlscan")
         if urlscan_result and not urlscan_result.passed:

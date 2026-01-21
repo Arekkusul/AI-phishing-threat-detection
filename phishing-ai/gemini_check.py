@@ -209,6 +209,10 @@ def _build_findings_summary(check_findings: Dict[str, Any]) -> str:
             if details.get("dangerous_extensions"):
                 exts = details["dangerous_extensions"][:2]
                 finding += f" [dangerous: {', '.join(exts)}]"
+        elif name == "html_threats":
+            threats = details.get("threats_found", [])
+            if threats:
+                finding += f" [{', '.join(threats[:2])}]"
 
         lines.append(finding)
 
