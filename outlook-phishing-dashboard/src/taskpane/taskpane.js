@@ -5,20 +5,26 @@ let autoMode = false;
 let lastItemId = null;
 
 Office.onReady(() => {
-  document.getElementById("scanBtn").addEventListener("click", scanCurrentEmail);
-  document.getElementById("reportBtn").addEventListener("click", reportCurrentEmail);
-  document.getElementById("quarantineBtn").addEventListener("click", quarantineCurrentEmail);
-
+  const scanBtn = document.getElementById("scanBtn");
+  const reportBtn = document.getElementById("reportBtn");
+  const quarantineBtn = document.getElementById("quarantineBtn");
   const autoToggle = document.getElementById("autoToggle");
-  autoToggle.addEventListener("change", (e) => {
-    autoMode = e.target.checked;
-    setStatus(autoMode ? "Auto mode enabled." : "Auto mode disabled.");
 
-    if (autoMode) {
-      hookItemChanged();
-      scanCurrentEmail();
-    }
-  });
+  if (scanBtn) scanBtn.addEventListener("click", scanCurrentEmail);
+  if (reportBtn) reportBtn.addEventListener("click", reportCurrentEmail);
+  if (quarantineBtn) quarantineBtn.addEventListener("click", quarantineCurrentEmail);
+
+  if (autoToggle) {
+    autoToggle.addEventListener("change", (e) => {
+      autoMode = e.target.checked;
+      setStatus(autoMode ? "Auto mode enabled." : "Auto mode disabled.");
+
+      if (autoMode) {
+        hookItemChanged();
+        scanCurrentEmail();
+      }
+    });
+  }
 
   setStatus("Ready.");
 });
