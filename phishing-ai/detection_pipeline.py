@@ -245,18 +245,24 @@ class DetectionPipeline:
             result = model(text)[0]
             # LABEL_0 = legit, LABEL_1 = phishing
             is_phishing = result["label"] == "LABEL_1"
-            score = result["score"] * 100
+            confidence = result["score"] * 100  # Raw confidence in prediction
 
-            if not is_phishing:
-                score = 100 - score  # Invert for legit classification
+            # For aggregation, we need a "phishing likelihood" score
+            # But ai_score will show the raw confidence
+            phishing_score = confidence if is_phishing else (100 - confidence)
 
             return CheckResult(
                 name="bert_model",
-                score=score,
+                score=phishing_score,  # Used for weighted aggregation
                 passed=not is_phishing,
-                details={"label": result["label"], "raw_score": result["score"]}
+                details={
+                    "label": result["label"],
+                    "confidence": confidence,  # Raw BERT confidence (shown as ai_score)
+                    "is_phishing": is_phishing
+                }
             )
         except Exception as e:
+            logger.error(f"BERT model error: {e}")
             return CheckResult(name="bert_model", error=str(e))
 
     def check_header_mismatch(self, email_data: Dict) -> CheckResult:
@@ -820,7 +826,9 @@ class DetectionPipeline:
         indicators = self._build_indicators(results)
 
         # Extract scores for response
-        ai_score = results.get("bert_model", CheckResult(name="")).score
+        bert_result = results.get("bert_model", CheckResult(name=""))
+        # ai_score shows BERT's raw confidence in its prediction (not phishing likelihood)
+        ai_score = bert_result.details.get("confidence") if bert_result.details else bert_result.score
         sublime_score = results.get("sublime", CheckResult(name="")).score
 
         return PipelineResult(
