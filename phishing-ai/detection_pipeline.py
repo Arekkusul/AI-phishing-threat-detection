@@ -90,8 +90,17 @@ class DetectionPipeline:
             self._model_loaded = True
         return self._phish_pipeline
 
+    # Dangerous file extensions that are commonly used in phishing
+    DANGEROUS_EXTENSIONS = {
+        '.exe', '.scr', '.bat', '.cmd', '.com', '.pif', '.msi', '.msp',
+        '.dll', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.ps1',
+        '.jar', '.hta', '.cpl', '.reg', '.lnk', '.iso', '.img',
+        '.docm', '.xlsm', '.pptm', '.dotm', '.xltm', '.potm',  # Macro-enabled Office
+        '.zip', '.rar', '.7z', '.tar', '.gz',  # Archives (can hide malware)
+    }
+
     def parse_email(self, raw_email: str) -> Dict[str, Any]:
-        """Parse raw email or EML content into structured data."""
+        """Parse raw email or EML content into structured data including attachments."""
         # Handle base64-encoded EML from taskpane
         if raw_email.startswith("__BASE64_EML__:"):
             try:
@@ -114,18 +123,27 @@ class DetectionPipeline:
         from_addr = email.utils.parseaddr(from_header)[1]
         reply_addr = email.utils.parseaddr(reply_to)[1] if reply_to else ""
 
-        # Get body
+        # Get body and attachments
         body_text = ""
         body_html = ""
+        attachments = []
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
-                if content_type == "text/plain":
+                content_disposition = str(part.get("Content-Disposition", ""))
+
+                # Check if this is an attachment
+                if "attachment" in content_disposition or part.get_filename():
+                    attachment = self._extract_attachment(part)
+                    if attachment:
+                        attachments.append(attachment)
+                elif content_type == "text/plain" and not body_text:
                     try:
                         body_text = part.get_payload(decode=True).decode("utf-8", errors="replace")
                     except:
                         body_text = str(part.get_payload())
-                elif content_type == "text/html":
+                elif content_type == "text/html" and not body_html:
                     try:
                         body_html = part.get_payload(decode=True).decode("utf-8", errors="replace")
                     except:
@@ -153,8 +171,43 @@ class DetectionPipeline:
             "message_id": message_id,
             "body_text": body_text,
             "body_html": body_html,
-            "full_text": f"Subject: {subject}\n\n{body_text}"
+            "full_text": f"Subject: {subject}\n\n{body_text}",
+            "attachments": attachments
         }
+
+    def _extract_attachment(self, part) -> Optional[Dict[str, Any]]:
+        """Extract attachment metadata and compute hashes."""
+        try:
+            filename = part.get_filename() or "unknown"
+            content_type = part.get_content_type()
+            payload = part.get_payload(decode=True)
+
+            if not payload:
+                return None
+
+            # Compute hashes
+            sha256_hash = hashlib.sha256(payload).hexdigest()
+            md5_hash = hashlib.md5(payload).hexdigest()
+
+            # Get file extension
+            ext = ""
+            if "." in filename:
+                ext = "." + filename.rsplit(".", 1)[1].lower()
+
+            # Check if extension is dangerous
+            is_dangerous = ext in self.DANGEROUS_EXTENSIONS
+
+            return {
+                "filename": filename,
+                "content_type": content_type,
+                "size": len(payload),
+                "sha256": sha256_hash,
+                "md5": md5_hash,
+                "extension": ext,
+                "is_dangerous_extension": is_dangerous
+            }
+        except Exception:
+            return None
 
     def extract_urls(self, text: str) -> List[str]:
         """Extract all URLs from text."""
@@ -374,8 +427,10 @@ class DetectionPipeline:
     def check_sublime_security(self, email_data: Dict) -> CheckResult:
         """Run Sublime Security attack score API."""
         try:
+            # Sublime API requires base64-encoded RFC822 message
+            encoded_email = base64.b64encode(email_data["raw"].encode()).decode()
             result = sublime_attack_score(
-                email_data["raw"],
+                encoded_email,
                 timeout_s=15,
                 raise_for_http_errors=False
             )
@@ -383,15 +438,21 @@ class DetectionPipeline:
             if "error" in result:
                 return CheckResult(name="sublime", error=result.get("error"))
 
-            # Sublime returns attack_score 0-1
-            attack_score = result.get("attack_score", 0)
-            score = attack_score * 100
+            # Sublime returns score 0-100 and verdict (malicious/benign)
+            score = result.get("score", 0)
+            verdict = result.get("verdict", "unknown")
+            top_signals = result.get("top_signals", [])
 
             return CheckResult(
                 name="sublime",
                 score=score,
-                passed=score < 50,
-                details={"attack_score": attack_score, "raw_result": result}
+                passed=verdict != "malicious" and score < 50,
+                details={
+                    "score": score,
+                    "verdict": verdict,
+                    "top_signals": top_signals[:3],
+                    "graymail_score": result.get("graymail_score", 0)
+                }
             )
         except Exception as e:
             return CheckResult(name="sublime", error=str(e))
@@ -428,44 +489,126 @@ class DetectionPipeline:
             return CheckResult(name="urlscan", error=str(e))
 
     def check_virustotal(self, email_data: Dict) -> CheckResult:
-        """Check attachment hashes against VirusTotal."""
-        # For now, we hash the email body as a simple check
-        # In production, this would extract and hash actual attachments
-        body_hash = hashlib.sha256(email_data["body_text"].encode()).hexdigest()
+        """Check attachment hashes against VirusTotal.
+
+        Scans actual attachment SHA256 hashes, not email body.
+        Also flags dangerous file extensions even if VT has no data.
+        """
+        attachments = email_data.get("attachments", [])
+
+        if not attachments:
+            return CheckResult(
+                name="virustotal",
+                passed=True,
+                score=0,
+                details={"skipped": True, "reason": "No attachments"}
+            )
 
         api_key = os.getenv("VIRUSTOTAL_API_KEY")
         if not api_key:
-            return CheckResult(name="virustotal", passed=True, score=0,
-                             details={"skipped": True, "reason": "No API key"})
-
-        try:
-            result = virustotal_lookup_file_hash(body_hash, api_key=api_key)
-
-            if not result["found"]:
+            # Still check for dangerous extensions even without API key
+            dangerous_attachments = [a for a in attachments if a.get("is_dangerous_extension")]
+            if dangerous_attachments:
                 return CheckResult(
                     name="virustotal",
-                    passed=True,
-                    score=0,
-                    details={"hash": body_hash, "found": False}
+                    passed=False,
+                    score=60,
+                    details={
+                        "skipped_vt": True,
+                        "reason": "No API key",
+                        "dangerous_extensions": [a["filename"] for a in dangerous_attachments]
+                    }
                 )
-
-            stats = result.get("raw", {}).get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-            malicious = stats.get("malicious", 0)
-            suspicious = stats.get("suspicious", 0)
-
-            score = min((malicious * 10) + (suspicious * 5), 100)
-
             return CheckResult(
                 name="virustotal",
-                score=score,
-                passed=malicious == 0,
-                details={"hash": body_hash, "stats": stats}
+                passed=True,
+                score=0,
+                details={"skipped": True, "reason": "No API key"}
             )
-        except Exception as e:
-            return CheckResult(name="virustotal", error=str(e))
 
-    def get_gemini_reasoning(self, verdict: Verdict, confidence: float, email_data: Dict) -> List[str]:
-        """Get AI reasoning from Gemini for the verdict."""
+        # Scan each attachment (limit to 5 to avoid rate limits)
+        scan_results = []
+        total_malicious = 0
+        total_suspicious = 0
+        dangerous_extensions = []
+
+        for attachment in attachments[:5]:
+            sha256 = attachment.get("sha256")
+            filename = attachment.get("filename", "unknown")
+            is_dangerous = attachment.get("is_dangerous_extension", False)
+
+            if is_dangerous:
+                dangerous_extensions.append(filename)
+
+            if not sha256:
+                continue
+
+            try:
+                result = virustotal_lookup_file_hash(sha256, api_key=api_key)
+
+                if result["found"]:
+                    stats = result.get("raw", {}).get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+                    malicious = stats.get("malicious", 0)
+                    suspicious = stats.get("suspicious", 0)
+
+                    total_malicious += malicious
+                    total_suspicious += suspicious
+
+                    scan_results.append({
+                        "filename": filename,
+                        "sha256": sha256[:16] + "...",
+                        "found": True,
+                        "malicious": malicious,
+                        "suspicious": suspicious
+                    })
+                else:
+                    scan_results.append({
+                        "filename": filename,
+                        "sha256": sha256[:16] + "...",
+                        "found": False
+                    })
+            except Exception as e:
+                scan_results.append({
+                    "filename": filename,
+                    "error": str(e)[:50]
+                })
+
+        # Calculate score
+        # High score if malicious files found, medium if dangerous extensions
+        score = 0
+        if total_malicious > 0:
+            score = min(100, 70 + (total_malicious * 5))
+        elif total_suspicious > 0:
+            score = min(60, 30 + (total_suspicious * 5))
+        elif dangerous_extensions:
+            score = 40  # Dangerous extension but no VT data
+
+        return CheckResult(
+            name="virustotal",
+            score=score,
+            passed=total_malicious == 0 and len(dangerous_extensions) == 0,
+            details={
+                "attachments_scanned": len(scan_results),
+                "total_malicious": total_malicious,
+                "total_suspicious": total_suspicious,
+                "dangerous_extensions": dangerous_extensions,
+                "scan_results": scan_results,
+                "malicious_count": total_malicious  # For Gemini summary
+            }
+        )
+
+    def get_gemini_reasoning(
+        self,
+        verdict: Verdict,
+        confidence: float,
+        email_data: Dict,
+        check_results: Optional[Dict[str, CheckResult]] = None
+    ) -> List[str]:
+        """Get AI reasoning from Gemini for the verdict.
+
+        Optimized to pass check findings to Gemini instead of raw email,
+        reducing token usage by ~80%.
+        """
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             return ["AI reasoning unavailable - Gemini API key not configured"]
@@ -474,7 +617,8 @@ class DetectionPipeline:
             reasons = gemini_explain_reasons(
                 verdict=verdict if verdict != "SUSPICIOUS" else "PHISHING",
                 confidence_pct=confidence,
-                email_text=email_data["full_text"][:4000],
+                email_text=email_data["full_text"][:500],  # Only need subject/brief context
+                check_findings=check_results,  # Pass findings for efficient reasoning
                 api_key=api_key
             )
             return [r for r in reasons if r]
@@ -542,8 +686,8 @@ class DetectionPipeline:
         # Aggregate results
         verdict, confidence = self._aggregate_results(results)
 
-        # Get AI reasoning
-        reasons = self.get_gemini_reasoning(verdict, confidence, email_data)
+        # Get AI reasoning (pass check results for efficient token usage)
+        reasons = self.get_gemini_reasoning(verdict, confidence, email_data, results)
 
         # Build indicators list
         indicators = self._build_indicators(results)
@@ -644,9 +788,13 @@ class DetectionPipeline:
 
         vt_result = results.get("virustotal")
         if vt_result and not vt_result.passed:
-            stats = vt_result.details.get("stats", {})
-            malicious = stats.get("malicious", 0)
-            indicators.append(f"VirusTotal: {malicious} vendors flagged content as malicious")
+            malicious = vt_result.details.get("total_malicious", 0)
+            dangerous_exts = vt_result.details.get("dangerous_extensions", [])
+
+            if malicious > 0:
+                indicators.append(f"VirusTotal: {malicious} vendors flagged attachment as malicious")
+            if dangerous_exts:
+                indicators.append(f"Dangerous attachment type: {', '.join(dangerous_exts[:2])}")
 
         return indicators
 
